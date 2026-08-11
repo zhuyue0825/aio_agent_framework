@@ -34,7 +34,9 @@ data/*.sqlite3
 data/*.sqlite3-*
 traces/
 screenshots/
-bundles/
+bundles/*
+!bundles/aio_agent_training_assets_20260811.tar.chunk-*
+!bundles/aio_agent_training_assets_20260811.SHA256SUMS
 
 # Models, checkpoints, and training output
 finetuning_lab/models/

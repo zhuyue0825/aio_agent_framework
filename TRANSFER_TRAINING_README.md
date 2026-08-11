@@ -30,6 +30,23 @@ This bundle is for moving the current local AIO Agent app and DeepSeek LoRA trai
 
 These are machine-local dependency/cache folders and should be recreated on the target machine.
 
+## Restore GitHub Training Assets
+
+The large model, LoRA outputs, and MiniMind files are stored as split Git LFS
+assets under `bundles/`. Install Git LFS on the target machine, then run from
+the repository root:
+
+```bash
+git lfs install
+git lfs pull --include="bundles/aio_agent_training_assets_20260811.tar.chunk-*"
+(cd bundles && shasum -a 256 -c aio_agent_training_assets_20260811.SHA256SUMS)
+cat bundles/aio_agent_training_assets_20260811.tar.chunk-* | tar -xf -
+```
+
+This restores `finetuning_lab/models/`, `finetuning_lab/outputs/`, and the
+local MiniMind workspace. The split files can remain in `bundles/` as a backup
+or be removed locally after the restored files have been verified.
+
 ## Setup On Target Machine
 
 From the extracted project root:
