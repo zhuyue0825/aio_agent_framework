@@ -41,6 +41,9 @@ finetuning_lab/models/
 finetuning_lab/outputs/
 finetuning_lab/data/processed/*.jsonl
 !finetuning_lab/data/processed/deepseek_agent_sft_sample.jsonl
+!finetuning_lab/data/processed/aio_agent_mixed_chat_tool_sft.jsonl
+!finetuning_lab/data/processed/aio_agent_sft.jsonl
+!finetuning_lab/data/processed/aio_agent_tool_call_sft.jsonl
 *.safetensors
 *.pt
 *.pth

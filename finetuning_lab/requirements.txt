@@ -1,0 +1,12 @@
+# Recreate the training environment instead of copying .venv-train.
+# If PyTorch needs a CUDA-specific build, install the matching build first.
+accelerate==1.11.0
+datasets==4.0.0
+huggingface_hub==1.22.0
+llamafactory==0.9.5
+peft==0.18.1
+safetensors==0.8.0
+sentencepiece==0.2.1
+torch==2.12.1
+transformers==5.6.0
+trl==0.24.0

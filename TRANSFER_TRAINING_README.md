@@ -38,13 +38,7 @@ From the extracted project root:
 python3 -m venv .venv-train
 source .venv-train/bin/activate
 pip install -r backend/requirements.txt
-pip install torch transformers peft
-```
-
-If you want to continue training:
-
-```bash
-pip install llamafactory
+pip install -r finetuning_lab/requirements.txt
 ```
 
 Install frontend dependencies:
