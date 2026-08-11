@@ -1,0 +1,27 @@
+services:
+  aio-sandbox:
+    image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0
+    container_name: aio-sandbox-demo
+    security_opt:
+      - seccomp=unconfined
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: aio-agent-backend
+    environment:
+      AIO_SANDBOX_URL: http://host.docker.internal:8080
+      MODEL_API_BASE: ${MODEL_API_BASE:-https://api.openai.com/v1}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - aio-sandbox
+    volumes:
+      - ./data:/private/tmp/aio_agent_framework/data
+      - ./traces:/private/tmp/aio_agent_framework/traces

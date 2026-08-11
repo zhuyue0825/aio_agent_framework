@@ -1,0 +1,52 @@
+# macOS and editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+.venv-*/
+.pip-cache/
+.cache/
+.hf-home/
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+local/
+
+# Runtime state and generated artifacts
+data/*.sqlite3
+data/*.sqlite3-*
+traces/
+screenshots/
+bundles/
+
+# Models, checkpoints, and training output
+finetuning_lab/models/
+finetuning_lab/outputs/
+finetuning_lab/data/processed/*.jsonl
+!finetuning_lab/data/processed/deepseek_agent_sft_sample.jsonl
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+wandb/
+runs/
+
+# MiniMind is maintained as a separate nested repository.
+minimind/

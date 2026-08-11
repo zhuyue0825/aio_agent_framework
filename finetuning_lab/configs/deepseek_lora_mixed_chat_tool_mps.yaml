@@ -1,0 +1,51 @@
+### Model
+model_name_or_path: /Users/bytedance/Documents/aio_agent_framework/finetuning_lab/models/deepseek-r1-distill-qwen-1.5b
+trust_remote_code: true
+low_cpu_mem_usage: true
+
+### Method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 8
+lora_alpha: 16
+
+### Dataset
+dataset_dir: /Users/bytedance/Documents/aio_agent_framework/finetuning_lab/data/processed
+dataset: aio_agent_mixed_chat_tool_sft
+template: qwen
+cutoff_len: 1024
+max_samples: 512
+overwrite_cache: true
+preprocessing_num_workers: 1
+
+### Output
+output_dir: /Users/bytedance/Documents/aio_agent_framework/finetuning_lab/outputs/deepseek-r1-distill-qwen-1.5b-lora-mixed-chat-tool-mps
+logging_steps: 10
+save_steps: 150
+save_strategy: steps
+plot_loss: false
+overwrite_output_dir: true
+save_only_model: true
+
+### Train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 0.00008
+max_steps: 450
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: false
+fp16: false
+gradient_checkpointing: false
+max_grad_norm: 1.0
+
+### Eval
+val_size: 0
+eval_strategy: "no"
+
+### Runtime
+ddp_timeout: 180000000
+report_to: none
+dataloader_pin_memory: false
