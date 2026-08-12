@@ -16,17 +16,16 @@ Agent Runtime 跑在沙箱外
 ## 文件结构
 
 ```text
-/private/tmp/aio_agent_framework
+aio_agent_framework/
 ├── cli.py
 ├── README.md
 ├── APP_README.md
+├── business-service/        # Spring Boot 业务控制面
+│   ├── mvnw
+│   └── src/
 ├── backend/
-│   ├── main.py
-│   ├── db.py
-│   ├── agent_runtime.py
-│   ├── tools.py
-│   ├── sandbox_client.py
-│   └── approval.py
+│   ├── main.py              # FastAPI 内部 Agent API
+│   └── workspace.py
 ├── frontend/
 │   ├── src/App.tsx
 │   ├── src/Chat.tsx
@@ -61,7 +60,8 @@ Agent Runtime 跑在沙箱外
 - `mcp.py`：最小 MCP HTTP 客户端，把 `/v1/mcp` 暴露的工具接入 Agent。
 - `web.py`：无依赖 Web UI，页面里输入任务并查看结果。
 - `cli.py`：命令行入口。
-- `backend/`：FastAPI 后端，提供会话、消息、运行 Agent、工具 Demo API。
+- `business-service/`：Java 21 / Spring Boot 4.1 业务服务，负责认证、项目授权、会话消息、任务状态、PostgreSQL、SSE 和可观测性。
+- `backend/`：FastAPI Agent 执行服务，只接收 Java 传入的任务与历史消息，不访问业务数据库。
 - `backend/workspace.py`：本地项目目录树、文件预览、受项目根目录约束的读写与搜索能力。
 - `frontend/`：React/Vite 前端，支持纯对话、项目文件树和右侧代码预览/编辑。
 - `APP_README.md`：本地 Web App 的启动说明。
@@ -71,7 +71,7 @@ Agent Runtime 跑在沙箱外
 不需要模型 key：
 
 ```bash
-cd /private/tmp/aio_agent_framework
+cd /path/to/aio_agent_framework
 python3 cli.py --demo
 ```
 
@@ -85,7 +85,7 @@ python3 cli.py --demo
 ## 接模型运行
 
 ```bash
-cd /private/tmp/aio_agent_framework
+cd /path/to/aio_agent_framework
 
 export MODEL_API_BASE="https://your-model-host/v1"
 export MODEL_API_KEY="your-key"
@@ -127,7 +127,7 @@ python3 cli.py --approval auto "..."
 默认 trace 文件：
 
 ```bash
-/private/tmp/aio_agent_framework/traces/latest.jsonl
+/path/to/aio_agent_framework/traces/latest.jsonl
 ```
 
 每一行是一条 JSON 事件，包括：
@@ -143,14 +143,14 @@ python3 cli.py --approval auto "..."
 
 ```bash
 python3 cli.py \
-  --trace /private/tmp/aio_agent_framework/traces/run-001.jsonl \
+  --trace /path/to/aio_agent_framework/traces/run-001.jsonl \
   "在沙箱里列出当前目录"
 ```
 
 查看 trace：
 
 ```bash
-tail -n 20 /private/tmp/aio_agent_framework/traces/latest.jsonl
+tail -n 20 /path/to/aio_agent_framework/traces/latest.jsonl
 ```
 
 ## MCP 工具模式
@@ -194,7 +194,7 @@ REST 模式适合学习每个 API 怎么调；MCP 模式更接近“把沙箱能
 启动无依赖页面：
 
 ```bash
-cd /private/tmp/aio_agent_framework
+cd /path/to/aio_agent_framework
 python3 cli.py --web --port 8765
 ```
 
@@ -211,18 +211,17 @@ http://127.0.0.1:8765
 
 ### 正规本地 Web App
 
-这个版本拆成了 FastAPI 后端和 React/Vite 前端：
+这个版本拆成 React、Spring Boot 业务服务、FastAPI Agent 执行服务和 PostgreSQL。完整说明见 `APP_README.md`。
 
 ```bash
-cd /private/tmp/aio_agent_framework
-python3 -m pip install -r backend/requirements.txt
-uvicorn backend.main:app --host 127.0.0.1 --port 8000
+cd /path/to/aio_agent_framework
+docker compose up -d --build
 ```
 
-另开一个终端：
+再启动前端：
 
 ```bash
-cd /private/tmp/aio_agent_framework/frontend
+cd /path/to/aio_agent_framework/frontend
 npm install
 npm run dev
 ```
@@ -233,14 +232,17 @@ npm run dev
 http://127.0.0.1:5173
 ```
 
-这个版本支持：
+当前版本支持：
 
-- SQLite 保存会话和消息。
+- Spring Security 登录、JWT 和项目成员授权。
+- PostgreSQL 保存会话、消息、项目、任务和事件，Flyway 管理表结构。
+- 旧 `data/app.sqlite3` 只作为幂等迁移源，不再由 FastAPI 读写。
 - 显式切换“纯对话”和“项目工作”，不再通过关键词猜测是否调用工具。
 - 在应用内打开本地文件夹，左侧浏览目录树，右侧预览、编辑和保存文本代码文件。
 - Agent 修改文件后刷新目录树、标记本次修改，并自动打开首个修改文件。
 - 项目文件 API 会阻止 `..`、绝对路径和符号链接逃逸到已打开目录之外。
-- FastAPI 提供 `/api/conversations`、`/api/conversations/{id}/run`、`/api/tool-demo`。
+- Java 提供异步任务、幂等键、超时、取消、SSE、Trace ID、Actuator 和 Prometheus 指标。
+- FastAPI 只提供带内部令牌的 Agent/工作区接口。
 - 模型 key 只放在后端环境变量里，不进入前端。
 
 ## 当前内置工具

@@ -1,0 +1,9 @@
+**
+!agent_framework/
+!agent_framework/**
+!backend/
+!backend/**
+!.dockerignore
+**/__pycache__/
+**/*.pyc
+backend/tests/

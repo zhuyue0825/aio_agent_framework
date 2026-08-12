@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .approval import ApprovalPolicy
 from .config import AgentConfig
@@ -17,6 +17,14 @@ class AgentResult:
     final_answer: str
     steps: int
     messages: list[dict[str, Any]]
+
+
+class AgentRunCancelled(RuntimeError):
+    """Raised when the control plane asks a cooperative Agent run to stop."""
+
+
+CancelCheck = Callable[[], bool]
+EventCallback = Callable[[str, dict[str, Any]], None]
 
 
 class AgentRuntime:
@@ -36,8 +44,18 @@ class AgentRuntime:
         self.trace = trace or TraceLogger()
         self.system_prompt = system_prompt
 
-    def run(self, task: str) -> AgentResult:
+    def run(
+        self,
+        task: str,
+        *,
+        should_cancel: CancelCheck | None = None,
+        on_event: EventCallback | None = None,
+    ) -> AgentResult:
+        cancel_check = should_cancel or (lambda: False)
+        event_callback = on_event or (lambda _event, _payload: None)
+        self._raise_if_cancelled(cancel_check)
         self.trace.log("run_start", {"task": task, "max_steps": self.config.max_steps})
+        event_callback("agent.started", {"max_steps": self.config.max_steps})
         tool_names = [spec["function"]["name"] for spec in self.tools.specs()]
         default_system_prompt = (
             "You are a coding agent. Use the provided tools for file and project work. "
@@ -54,11 +72,15 @@ class AgentRuntime:
         ]
 
         for step in range(1, self.config.max_steps + 1):
+            self._raise_if_cancelled(cancel_check)
+            event_callback("agent.step.started", {"step": step})
             try:
                 assistant_message = self.model.complete(messages, self.tools.specs())
             except Exception as exc:
                 self.trace.log("model_error", {"step": step, "error": str(exc)})
+                event_callback("agent.model.failed", {"step": step, "error": str(exc)})
                 raise
+            self._raise_if_cancelled(cancel_check)
             self.trace.log(
                 "model_message",
                 {
@@ -68,21 +90,28 @@ class AgentRuntime:
                 },
             )
             tool_calls = assistant_message.get("tool_calls") or []
+            event_callback(
+                "agent.model.completed",
+                {"step": step, "tool_call_count": len(tool_calls)},
+            )
 
             if not tool_calls:
                 final_answer = assistant_message.get("content") or ""
                 messages.append(assistant_message)
                 self.trace.log("run_end", {"status": "completed", "steps": step, "final_answer": final_answer})
+                event_callback("agent.completed", {"steps": step})
                 return AgentResult(final_answer=final_answer, steps=step, messages=messages)
 
             messages.append(assistant_message)
             for tool_call in tool_calls:
+                self._raise_if_cancelled(cancel_check)
                 name = tool_call["function"]["name"]
                 raw_arguments = tool_call["function"].get("arguments") or "{}"
                 arguments = json.loads(raw_arguments)
 
                 self._trace_tool_call(step, name, arguments)
                 self.trace.log("tool_call", {"step": step, "name": name, "arguments": arguments})
+                event_callback("agent.tool.started", {"step": step, "tool": name})
 
                 decision = self.approval.check(name, arguments)
                 self.trace.log(
@@ -103,6 +132,10 @@ class AgentRuntime:
                     }
                     self._trace_tool_result(result)
                     self.trace.log("tool_result", {"step": step, "name": name, "result": result})
+                    event_callback(
+                        "agent.tool.completed",
+                        {"step": step, "tool": name, "success": False, "denied": True},
+                    )
                     messages.append(
                         {
                             "role": "tool",
@@ -113,8 +146,13 @@ class AgentRuntime:
                     continue
 
                 result = self.tools.call(name, arguments)
+                self._raise_if_cancelled(cancel_check)
                 self._trace_tool_result(result)
                 self.trace.log("tool_result", {"step": step, "name": name, "result": result})
+                event_callback(
+                    "agent.tool.completed",
+                    {"step": step, "tool": name, "success": bool(result.get("success"))},
+                )
 
                 messages.append(
                     {
@@ -126,7 +164,13 @@ class AgentRuntime:
 
         final_answer = f"Stopped after {self.config.max_steps} steps without a final answer."
         self.trace.log("run_end", {"status": "max_steps", "steps": self.config.max_steps, "final_answer": final_answer})
+        event_callback("agent.max_steps", {"steps": self.config.max_steps})
         return AgentResult(final_answer=final_answer, steps=self.config.max_steps, messages=messages)
+
+    def _raise_if_cancelled(self, should_cancel: CancelCheck) -> None:
+        if should_cancel():
+            self.trace.log("run_end", {"status": "cancelled"})
+            raise AgentRunCancelled("Agent run was cancelled")
 
     def _trace_tool_call(self, step: int, name: str, arguments: dict[str, Any]) -> None:
         print(

@@ -1,27 +1,71 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aio_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-aio_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aio_agent_local}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - aio-agent-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   aio-sandbox:
     image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0
-    container_name: aio-sandbox-demo
     security_opt:
       - seccomp=unconfined
     ports:
       - "127.0.0.1:8080:8080"
 
-  backend:
+  agent-service:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: aio-agent-backend
     environment:
-      AIO_SANDBOX_URL: http://host.docker.internal:8080
+      AIO_SANDBOX_URL: http://aio-sandbox:8080
       MODEL_API_BASE: ${MODEL_API_BASE:-https://api.openai.com/v1}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-internal-token-change-before-production}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       - aio-sandbox
     volumes:
-      - ./data:/private/tmp/aio_agent_framework/data
-      - ./traces:/private/tmp/aio_agent_framework/traces
+      - ./:/workspace/aio_agent_framework
+      - ./traces:/app/traces
+
+  business-service:
+    build:
+      context: ./business-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-aio_agent}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-aio_agent}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-aio_agent_local}
+      AGENT_SERVICE_BASE_URL: http://agent-service:8000
+      BUSINESS_SERVICE_CALLBACK_BASE_URL: http://business-service:8081
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-internal-token-change-before-production}
+      AIO_JWT_SECRET: ${AIO_JWT_SECRET:-local-development-secret-change-before-production-0123456789}
+      AIO_BOOTSTRAP_ADMIN_USERNAME: ${AIO_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      AIO_BOOTSTRAP_ADMIN_PASSWORD: ${AIO_BOOTSTRAP_ADMIN_PASSWORD:-aio-local-admin}
+      AIO_LEGACY_IMPORT_ENABLED: ${AIO_LEGACY_IMPORT_ENABLED:-true}
+      AIO_LEGACY_SQLITE_PATH: /legacy/app.sqlite3
+      AIO_LEGACY_OWNER_USERNAME: ${AIO_LEGACY_OWNER_USERNAME:-admin}
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      agent-service:
+        condition: service_started
+    volumes:
+      - ./data:/legacy:ro
+
+volumes:
+  aio-agent-postgres-data:

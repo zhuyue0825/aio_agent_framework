@@ -1,4 +1,4 @@
-import { FolderCode, FolderOpen, MessageSquare, Send } from "lucide-react";
+import { FolderCode, FolderOpen, LogOut, MessageSquare, Send, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AppMode, Message, Status, Workspace } from "./api";
 
@@ -8,6 +8,10 @@ type ChatProps = {
   workspace: Workspace | null;
   messages: Message[];
   busy: boolean;
+  progress: string | null;
+  username: string;
+  onLogout: () => void;
+  onCancel: () => void;
   onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
   onSend: (task: string) => Promise<void>;
@@ -31,6 +35,10 @@ export default function Chat({
   workspace,
   messages,
   busy,
+  progress,
+  username,
+  onLogout,
+  onCancel,
   onModeChange,
   onOpenFolder,
   onSend,
@@ -59,33 +67,39 @@ export default function Chat({
     <main className="chat-shell">
       <header className="topbar">
         <div className="mode-control" aria-label="工作模式">
-          <button className={mode === "chat" ? "active" : ""} onClick={() => onModeChange("chat")}>
+          <button disabled={busy} className={mode === "chat" ? "active" : ""} onClick={() => onModeChange("chat")}>
             <MessageSquare size={16} />
             纯对话
           </button>
-          <button className={mode === "project" ? "active" : ""} onClick={() => onModeChange("project")}>
+          <button disabled={busy} className={mode === "project" ? "active" : ""} onClick={() => onModeChange("project")}>
             <FolderCode size={16} />
             项目工作
           </button>
         </div>
         <div className="topbar-context">
-          {mode === "project" ? (
-            workspace ? (
-              <span className="context-label" title={workspace.root}>
-                <FolderOpen size={15} />
-                {workspace.name}
-              </span>
+          <div className="topbar-service-context">
+            {mode === "project" ? (
+              workspace ? (
+                <span className="context-label" title={workspace.root}>
+                  <FolderOpen size={15} />
+                  {workspace.name}
+                </span>
+              ) : (
+                <button className="open-folder-inline" onClick={onOpenFolder}>
+                  <FolderOpen size={16} />
+                  打开文件夹
+                </button>
+              )
             ) : (
-              <button className="open-folder-inline" onClick={onOpenFolder}>
-                <FolderOpen size={16} />
-                打开文件夹
-              </button>
-            )
-          ) : (
-            <span className="context-label">
-              Model <strong>{status?.model_name ?? "连接中"}</strong>
-            </span>
-          )}
+              <span className="context-label">
+                Model <strong>{status?.model_name ?? "连接中"}</strong>
+              </span>
+            )}
+          </div>
+          <span className="signed-in-user" title={`当前用户：${username}`}>{username}</span>
+          <button className="icon-button" title="退出登录" onClick={onLogout}>
+            <LogOut size={16} />
+          </button>
         </div>
       </header>
 
@@ -144,11 +158,17 @@ export default function Chat({
             <article className="message assistant">
               <div className="avatar">AI</div>
               <div className="bubble">
-                <div className="role">{mode === "project" ? "正在处理项目" : "正在回复"}</div>
-                <div className="typing">
-                  <span />
-                  <span />
-                  <span />
+                <div className="role">{progress ?? (mode === "project" ? "正在处理项目" : "正在回复")}</div>
+                <div className="run-progress-row">
+                  <div className="typing">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <button className="cancel-run" onClick={onCancel}>
+                    <Square size={13} />
+                    取消任务
+                  </button>
                 </div>
               </div>
             </article>
@@ -160,7 +180,7 @@ export default function Chat({
         <div className="composer">
           <textarea
             value={draft}
-            disabled={!projectReady}
+            disabled={!projectReady || busy}
             placeholder={
               !projectReady
                 ? "请先打开项目文件夹"

@@ -21,6 +21,7 @@ htmlcov/
 # Frontend dependencies and build output
 node_modules/
 dist/
+target/
 coverage/
 
 # Secrets and machine-local configuration

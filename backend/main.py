@@ -1,21 +1,26 @@
 from __future__ import annotations
 
-import json
+import logging
+import os
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Literal
+from secrets import compare_digest
+from threading import RLock
+from time import monotonic
+from typing import Annotated, Any, Literal
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agent_framework.config import AgentConfig
+from agent_framework.http_json import post_json
 from agent_framework.model import OpenAICompatibleModel
+from agent_framework.runtime import AgentRunCancelled
 from agent_framework.trace import TraceLogger
 
 from .approval import ApprovalPolicy
 from .agent_runtime import AgentRuntime
-from .db import AppDB
-from .sandbox_client import SandboxClient
 from .workspace import (
     WorkspaceError,
     build_workspace_tools,
@@ -29,35 +34,45 @@ from .workspace import (
 )
 
 
+logger = logging.getLogger("aio_agent.execution_service")
 config = AgentConfig.from_env()
-db = AppDB()
-app = FastAPI(title="AIO Agent App", version="0.1.0")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRACE_PATH = PROJECT_ROOT / "traces" / "app.jsonl"
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+INTERNAL_SERVICE_TOKEN = os.environ.get(
+    "INTERNAL_SERVICE_TOKEN",
+    "local-internal-token-change-before-production",
 )
 
 
-class ConversationCreate(BaseModel):
-    title: str = "新对话"
+def require_internal_token(
+    supplied: Annotated[str | None, Header(alias="X-Internal-Token")] = None,
+) -> None:
+    if supplied is None or not compare_digest(supplied, INTERNAL_SERVICE_TOKEN):
+        raise HTTPException(status_code=401, detail={"code": "INVALID_INTERNAL_TOKEN", "message": "内部服务凭证无效"})
 
 
-class ConversationTitleUpdate(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
+app = FastAPI(
+    title="AIO Agent Execution Service",
+    version="0.2.0",
+    dependencies=[Depends(require_internal_token)],
+)
 
 
-class RunRequest(BaseModel):
-    task: str = Field(min_length=1)
-    approval_mode: str = "auto"
-    max_history_messages: int = Field(default=8, ge=0, le=30)
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=100_000)
+
+
+class AgentRunRequest(BaseModel):
+    run_id: UUID
+    task: str = Field(min_length=1, max_length=100_000)
     mode: Literal["chat", "project"] = "chat"
-    workspace_path: str | None = None
+    history: list[HistoryMessage] = Field(default_factory=list, max_length=30)
+    workspace_root: str | None = None
+    approval_mode: str = "auto"
+    max_steps: int = Field(default=8, ge=1, le=30)
+    trace_id: str | None = Field(default=None, max_length=128)
+    callback_url: str | None = Field(default=None, max_length=2_000)
 
 
 class WorkspaceOpenRequest(BaseModel):
@@ -70,40 +85,75 @@ class WorkspaceFileWriteRequest(BaseModel):
     content: str
 
 
-def ensure_conversation(conversation_id: str) -> dict[str, Any]:
-    conversation = db.get_conversation(conversation_id)
-    if not conversation:
-        raise HTTPException(status_code=404, detail="conversation not found")
-    return conversation
+class CancellationRegistry:
+    """Tracks active runs and cancellation tombstones across FastAPI worker threads."""
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._active: set[UUID] = set()
+        self._cancelled: dict[UUID, float] = {}
+
+    def begin(self, run_id: UUID) -> None:
+        with self._lock:
+            self._purge()
+            if run_id in self._active:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "RUN_ALREADY_ACTIVE", "message": "Agent run is already active"},
+                )
+            self._active.add(run_id)
+
+    def finish(self, run_id: UUID) -> None:
+        with self._lock:
+            self._active.discard(run_id)
+            self._cancelled.pop(run_id, None)
+
+    def cancel(self, run_id: UUID) -> bool:
+        with self._lock:
+            self._purge()
+            active = run_id in self._active
+            self._cancelled[run_id] = monotonic()
+            return active
+
+    def is_cancelled(self, run_id: UUID) -> bool:
+        with self._lock:
+            return run_id in self._cancelled
+
+    def _purge(self) -> None:
+        cutoff = monotonic() - 600
+        expired = [run_id for run_id, created_at in self._cancelled.items() if created_at < cutoff]
+        for run_id in expired:
+            self._cancelled.pop(run_id, None)
 
 
-def build_project_context(conversation_id: str, task: str, max_history_messages: int) -> str:
-    if max_history_messages <= 0:
-        return task
-    messages = db.list_messages(conversation_id)
-    if messages and messages[-1]["role"] == "user":
-        messages = messages[:-1]
-    history: list[str] = []
-    for message in messages[-max_history_messages:]:
-        if message["role"] not in {"user", "assistant"}:
-            continue
-        content = str(message["content"])
-        if message["role"] == "assistant" and ('"tool_call"' in content or "模型生成了无效工具调用" in content):
-            continue
-        if len(content) > 1200:
-            content = content[:1200] + "...<已截断>"
-        history.append(f"{'用户' if message['role'] == 'user' else '助手'}：{content}")
-    if not history:
-        return task
-    return "\n".join(
-        [
-            "下面是当前 App 对话的最近上下文，请理解上下文后完成用户最新任务。",
-            "",
-            *history,
-            "",
-            f"用户最新任务：{task}",
-        ]
-    )
+cancellations = CancellationRegistry()
+
+
+class ProgressReporter:
+    def __init__(self, run_id: UUID, trace_id: str, callback_url: str | None) -> None:
+        self.run_id = run_id
+        self.trace_id = trace_id
+        self.callback_url = callback_url
+
+    def emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        if not self.callback_url:
+            return
+        try:
+            post_json(
+                self.callback_url,
+                {
+                    "event_type": event_type,
+                    "payload": {"run_id": str(self.run_id), "trace_id": self.trace_id, **payload},
+                    "trace_id": self.trace_id,
+                },
+                headers={
+                    "X-Internal-Token": INTERNAL_SERVICE_TOKEN,
+                    "X-Trace-Id": self.trace_id,
+                },
+                timeout=3,
+            )
+        except Exception as exc:  # Progress reporting must not make the Agent run fail.
+            logger.warning("progress callback failed for run %s: %s", self.run_id, exc)
 
 
 def trim_repetitive_answer(text: str) -> str:
@@ -124,30 +174,26 @@ def trim_repetitive_answer(text: str) -> str:
     return "\n\n".join(kept).strip()
 
 
-def run_plain_chat(conversation_id: str, max_history_messages: int) -> dict[str, Any]:
+def run_plain_chat(
+    task: str,
+    history: list[HistoryMessage],
+    should_cancel: Any,
+    on_event: Any,
+) -> dict[str, Any]:
+    should_raise_cancelled(should_cancel)
+    on_event("agent.step.started", {"step": 1})
     model = OpenAICompatibleModel(config)
-    history = db.list_messages(conversation_id)
-    if max_history_messages > 0:
-        history = history[-max_history_messages:]
-    else:
-        history = history[-1:]
     messages: list[dict[str, str]] = [
         {
             "role": "system",
             "content": "你是 MiniMind，一个中文聊天助手。自然、清楚地回答用户；不知道时直接说明。",
-        }
+        },
+        *[{"role": item.role, "content": item.content} for item in history],
+        {"role": "user", "content": task},
     ]
-    for item in history:
-        if item["role"] not in {"user", "assistant"}:
-            continue
-        messages.append({"role": item["role"], "content": str(item["content"])})
-    message = model.complete(
-        messages,
-        tools=[],
-        max_tokens=512,
-        temperature=0.05,
-        top_p=0.7,
-    )
+    message = model.complete(messages, tools=[], max_tokens=512, temperature=0.05, top_p=0.7)
+    should_raise_cancelled(should_cancel)
+    on_event("agent.completed", {"steps": 1})
     return {
         "final_answer": trim_repetitive_answer(message.get("content") or ""),
         "steps": 1,
@@ -155,22 +201,44 @@ def run_plain_chat(conversation_id: str, max_history_messages: int) -> dict[str,
     }
 
 
+def build_project_context(history: list[HistoryMessage], task: str) -> str:
+    formatted: list[str] = []
+    for message in history:
+        content = message.content
+        if message.role == "assistant" and ('"tool_call"' in content or "模型生成了无效工具调用" in content):
+            continue
+        if len(content) > 1_200:
+            content = content[:1_200] + "...<已截断>"
+        formatted.append(f"{'用户' if message.role == 'user' else '助手'}：{content}")
+    if not formatted:
+        return task
+    return "\n".join(
+        [
+            "下面是当前 App 对话的最近上下文，请理解上下文后完成用户最新任务。",
+            "",
+            *formatted,
+            "",
+            f"用户最新任务：{task}",
+        ]
+    )
+
+
 def run_project_agent(
-    conversation_id: str,
-    task: str,
-    max_history_messages: int,
-    approval_mode: str,
-    workspace_path: str,
+    request: AgentRunRequest,
+    trace_id: str,
+    should_cancel: Any,
+    on_event: Any,
 ) -> dict[str, Any]:
-    root = normalize_workspace_root(workspace_path)
+    if not request.workspace_root:
+        raise WorkspaceError("项目模式下必须由业务服务传入项目工作区")
+    root = normalize_workspace_root(request.workspace_root)
     before = snapshot_workspace(root)
     tools = build_workspace_tools(root)
-    # Workspace handlers resolve every path against root before approval sees the call.
     runtime = AgentRuntime(
-        config=config,
+        config=replace(config, max_steps=request.max_steps),
         tools=tools,
-        approval=ApprovalPolicy(approval_mode, writable_prefixes=("",)),
-        trace=TraceLogger(str(TRACE_PATH)),
+        approval=ApprovalPolicy(request.approval_mode, writable_prefixes=("",)),
+        trace=TraceLogger(str(TRACE_PATH), context={"trace_id": trace_id, "run_id": str(request.run_id)}),
         system_prompt=(
             "You are a coding agent working in one explicitly opened local project. "
             f"The project root is {root}. All tool paths must be relative to this root. "
@@ -180,7 +248,11 @@ def run_project_agent(
             "Answer the user in Chinese and mention the relative paths you changed."
         ),
     )
-    result = runtime.run(build_project_context(conversation_id, task, max_history_messages))
+    result = runtime.run(
+        build_project_context(request.history, request.task),
+        should_cancel=should_cancel,
+        on_event=on_event,
+    )
     after = snapshot_workspace(root)
     return {
         "final_answer": result.final_answer,
@@ -189,157 +261,106 @@ def run_project_agent(
     }
 
 
-@app.get("/api/status")
-def status() -> dict[str, Any]:
+def should_raise_cancelled(should_cancel: Any) -> None:
+    if should_cancel():
+        raise AgentRunCancelled("Agent run was cancelled")
+
+
+@app.get("/internal/v1/health")
+def health() -> dict[str, Any]:
     return {
-        "sandbox_url": config.sandbox_url,
-        "model_api_base": config.model_api_base,
+        "ok": True,
+        "service": "aio-agent-execution-service",
         "model_name": config.model_name,
         "max_steps": config.max_steps,
-        "has_model_key": bool(config.model_api_key),
-        "trace_path": str(TRACE_PATH),
-        "db_path": str(db.path),
         "supports_projects": True,
     }
 
 
-@app.get("/api/workspace/directories")
+@app.post("/internal/v1/agent/runs")
+def execute_agent_run(
+    request: AgentRunRequest,
+    header_trace_id: Annotated[str | None, Header(alias="X-Trace-Id")] = None,
+) -> dict[str, Any]:
+    trace_id = request.trace_id or header_trace_id or str(uuid4())
+    reporter = ProgressReporter(request.run_id, trace_id, request.callback_url)
+    cancellations.begin(request.run_id)
+    try:
+        reporter.emit("agent.request.accepted", {"mode": request.mode})
+        should_cancel = lambda: cancellations.is_cancelled(request.run_id)
+        if request.mode == "project":
+            result = run_project_agent(request, trace_id, should_cancel, reporter.emit)
+        else:
+            result = run_plain_chat(request.task, request.history, should_cancel, reporter.emit)
+        reporter.emit("agent.response.ready", {"steps": result["steps"]})
+        return {**result, "trace_id": trace_id}
+    except AgentRunCancelled as exc:
+        reporter.emit("agent.cancelled", {})
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUN_CANCELLED", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    except WorkspaceError as exc:
+        reporter.emit("agent.failed", {"code": "WORKSPACE_ERROR", "message": str(exc)})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "WORKSPACE_ERROR", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    except Exception as exc:
+        logger.exception("agent run %s failed (trace_id=%s)", request.run_id, trace_id)
+        reporter.emit("agent.failed", {"code": exc.__class__.__name__, "message": str(exc)})
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "AGENT_EXECUTION_ERROR", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    finally:
+        cancellations.finish(request.run_id)
+
+
+@app.delete("/internal/v1/agent/runs/{run_id}")
+def cancel_agent_run(run_id: UUID) -> dict[str, Any]:
+    return {"ok": True, "run_id": str(run_id), "active": cancellations.cancel(run_id)}
+
+
+@app.get("/internal/v1/workspaces/directories")
 def workspace_directories(path: str | None = Query(default=None)) -> dict[str, Any]:
     try:
         return list_directories(path)
     except WorkspaceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
-@app.post("/api/workspace/open")
+@app.post("/internal/v1/workspaces/open")
 def open_workspace(payload: WorkspaceOpenRequest) -> dict[str, Any]:
     try:
         root = normalize_workspace_root(payload.path)
         return {"workspace": build_workspace_tree(root)}
     except WorkspaceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
-@app.get("/api/workspace/tree")
+@app.get("/internal/v1/workspaces/tree")
 def workspace_tree(path: str = Query(min_length=1)) -> dict[str, Any]:
     try:
         root = normalize_workspace_root(path)
         return {"workspace": build_workspace_tree(root)}
     except WorkspaceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
-@app.get("/api/workspace/file")
+@app.get("/internal/v1/workspaces/file")
 def workspace_file(root: str = Query(min_length=1), path: str = Query(min_length=1)) -> dict[str, Any]:
     try:
         workspace_root = normalize_workspace_root(root)
         return {"file": read_workspace_file(workspace_root, path)}
     except WorkspaceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
-@app.put("/api/workspace/file")
+@app.put("/internal/v1/workspaces/file")
 def save_workspace_file(payload: WorkspaceFileWriteRequest) -> dict[str, Any]:
     try:
         workspace_root = normalize_workspace_root(payload.root)
         return {"file": write_workspace_file(workspace_root, payload.path, payload.content)}
     except WorkspaceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/conversations")
-def list_conversations() -> dict[str, Any]:
-    conversations = db.list_conversations()
-    if not conversations:
-        conversations = [db.create_conversation()]
-    return {"conversations": conversations}
-
-
-@app.post("/api/conversations")
-def create_conversation(payload: ConversationCreate) -> dict[str, Any]:
-    conversation = db.create_conversation(payload.title)
-    return {"conversation": conversation}
-
-
-@app.patch("/api/conversations/{conversation_id}")
-def update_conversation(conversation_id: str, payload: ConversationTitleUpdate) -> dict[str, Any]:
-    ensure_conversation(conversation_id)
-    db.update_conversation_title(conversation_id, payload.title)
-    return {"conversation": db.get_conversation(conversation_id)}
-
-
-@app.delete("/api/conversations/{conversation_id}")
-def delete_conversation(conversation_id: str) -> dict[str, Any]:
-    ensure_conversation(conversation_id)
-    db.delete_conversation(conversation_id)
-    return {"ok": True}
-
-
-@app.get("/api/conversations/{conversation_id}/messages")
-def list_messages(conversation_id: str) -> dict[str, Any]:
-    ensure_conversation(conversation_id)
-    return {"messages": db.list_messages(conversation_id)}
-
-
-@app.post("/api/conversations/{conversation_id}/run")
-def run_conversation(conversation_id: str, payload: RunRequest) -> dict[str, Any]:
-    conversation = ensure_conversation(conversation_id)
-    user_message = db.add_message(conversation_id, "user", payload.task)
-    if conversation["title"] == "新对话":
-        db.update_conversation_title(conversation_id, payload.task.strip().replace("\n", " ")[:40] or "新对话")
-
-    try:
-        if payload.mode == "project":
-            if not payload.workspace_path:
-                raise WorkspaceError("项目模式下请先打开一个文件夹")
-            result = run_project_agent(
-                conversation_id,
-                payload.task,
-                payload.max_history_messages,
-                payload.approval_mode,
-                payload.workspace_path,
-            )
-        else:
-            result = run_plain_chat(conversation_id, payload.max_history_messages)
-        assistant_message = db.add_message(
-            conversation_id,
-            "assistant",
-            result["final_answer"],
-            {
-                "steps": result["steps"],
-                "mode": payload.mode,
-                "workspace_path": payload.workspace_path,
-                "changed_files": result["changed_files"],
-            },
-        )
-        return {
-            "user_message": user_message,
-            "assistant_message": assistant_message,
-            "result": result,
-        }
-    except Exception as exc:
-        error_message = db.add_message(
-            conversation_id,
-            "error",
-            str(exc),
-            {"error_type": exc.__class__.__name__},
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": str(exc),
-                "error_message": error_message,
-            },
-        )
-
-
-@app.post("/api/tool-demo")
-def tool_demo() -> dict[str, Any]:
-    sandbox = SandboxClient(config.sandbox_url)
-    result = {
-        "shell_exec": sandbox.shell_exec("pwd && ls -la | head"),
-        "file_write": sandbox.file_write("/home/gem/app_demo.txt", "hello from aio agent app\n"),
-        "file_read": sandbox.file_read("/home/gem/app_demo.txt"),
-        "browser_navigate": sandbox.browser_navigate("https://example.com"),
-    }
-    return {"result": result, "result_json": json.dumps(result, ensure_ascii=False, indent=2)}
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc

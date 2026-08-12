@@ -1,0 +1,63 @@
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+
+spring:
+  application:
+    name: aio-agent-business-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5432/aio_agent}
+    username: ${SPRING_DATASOURCE_USERNAME:aio_agent}
+    password: ${SPRING_DATASOURCE_PASSWORD:aio_agent_local}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+
+app:
+  security:
+    jwt-secret: ${AIO_JWT_SECRET:local-development-secret-change-before-production-0123456789}
+    token-ttl: ${AIO_TOKEN_TTL:12h}
+  agent:
+    base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}
+    callback-base-url: ${BUSINESS_SERVICE_CALLBACK_BASE_URL:http://127.0.0.1:8081}
+    internal-token: ${INTERNAL_SERVICE_TOKEN:local-internal-token-change-before-production}
+    connect-timeout: ${AGENT_CONNECT_TIMEOUT:3s}
+    read-timeout: ${AGENT_READ_TIMEOUT:3m}
+  bootstrap:
+    admin-username: ${AIO_BOOTSTRAP_ADMIN_USERNAME:admin}
+    admin-password: ${AIO_BOOTSTRAP_ADMIN_PASSWORD:aio-local-admin}
+  legacy-import:
+    enabled: ${AIO_LEGACY_IMPORT_ENABLED:false}
+    sqlite-path: ${AIO_LEGACY_SQLITE_PATH:../data/app.sqlite3}
+    owner-username: ${AIO_LEGACY_OWNER_USERNAME:admin}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: AIO Agent Business Service
+    architecture: Spring Boot control plane plus FastAPI execution plane
+
+logging:
+  pattern:
+    level: "%5p [trace_id=%X{traceId:-}]"

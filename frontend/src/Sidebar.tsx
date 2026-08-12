@@ -26,8 +26,8 @@ type SidebarProps = {
   onSelectFile: (path: string) => void;
 };
 
-function formatTime(value: number) {
-  return new Date(value * 1000).toLocaleString([], {
+function formatTime(value: string) {
+  return new Date(value).toLocaleString([], {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

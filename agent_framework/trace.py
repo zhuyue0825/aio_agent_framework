@@ -7,8 +7,9 @@ from typing import Any
 
 
 class TraceLogger:
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(self, path: str | None = None, context: dict[str, Any] | None = None) -> None:
         self.path = Path(path) if path else None
+        self.context = dict(context or {})
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -18,6 +19,7 @@ class TraceLogger:
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event": event,
+            **self.context,
             "payload": payload,
         }
         with self.path.open("a", encoding="utf-8") as fp:
