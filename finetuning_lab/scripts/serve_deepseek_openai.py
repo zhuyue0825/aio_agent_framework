@@ -16,7 +16,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-ROOT = Path("/Users/bytedance/Documents/aio_agent_framework")
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = ROOT / "finetuning_lab/models/deepseek-r1-distill-qwen-1.5b"
 DEFAULT_ADAPTER = ROOT / "finetuning_lab/outputs/deepseek-r1-distill-qwen-1.5b-lora-mps-smoke"
 IDENTITY_PROMPT = (

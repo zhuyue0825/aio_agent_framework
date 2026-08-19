@@ -28,17 +28,24 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       AIO_SANDBOX_URL: http://aio-sandbox:8080
-      MODEL_API_BASE: ${MODEL_API_BASE:-https://api.openai.com/v1}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-remote}
+      MODEL_API_BASE: ${MODEL_API_BASE:-https://api.deepseek.com}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
-      MODEL_NAME: ${MODEL_NAME:-gpt-4.1-mini}
+      MODEL_NAME: ${MODEL_NAME:-deepseek-v4-flash}
+      LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://host.docker.internal:8010/v1}
+      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-local-deepseek-r1-distill-qwen-1.5b}
+      MODEL_SETTINGS_PATH: /app/data/model-settings.json
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-local-internal-token-change-before-production}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       - aio-sandbox
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./:/workspace/aio_agent_framework
+      - ./data:/app/data
       - ./traces:/app/traces
 
   business-service:

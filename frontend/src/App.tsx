@@ -20,6 +20,7 @@ import AuthScreen from "./AuthScreen";
 import Chat from "./Chat";
 import CodePreview from "./CodePreview";
 import FolderPicker from "./FolderPicker";
+import ModelSettingsDialog from "./ModelSettingsDialog";
 import Sidebar from "./Sidebar";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
@@ -69,6 +70,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [savingFile, setSavingFile] = useState(false);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [runProgress, setRunProgress] = useState<string | null>(null);
@@ -172,6 +174,7 @@ export default function App() {
     setSelectedFile(null);
     setActiveRun(null);
     setRunProgress(null);
+    setModelSettingsOpen(false);
   }
 
   useEffect(() => {
@@ -346,10 +349,12 @@ export default function App() {
         busy={Boolean(activeRun) || Boolean(runProgress)}
         progress={runProgress}
         username={user.username}
+        canManageModel={user.role === "ADMIN"}
         onLogout={() => void logout()}
         onCancel={() => void cancelActiveRun()}
         onModeChange={setMode}
         onOpenFolder={() => setFolderPickerOpen(true)}
+        onOpenModelSettings={() => setModelSettingsOpen(true)}
         onSend={send}
       />
       {mode === "project" ? (
@@ -374,6 +379,16 @@ export default function App() {
           } catch (err) {
             setToast(err instanceof Error ? err.message : String(err));
           }
+        }}
+      />
+      <ModelSettingsDialog
+        open={modelSettingsOpen}
+        onClose={() => setModelSettingsOpen(false)}
+        onSaved={async (settings) => {
+          setStatus(await api.status());
+          setToast(
+            `已切换为${settings.active_provider === "local" ? "本地模型" : "远程 API"}：${settings.active_model_name}`,
+          );
         }}
       />
       {toast ? (

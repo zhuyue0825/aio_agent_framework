@@ -36,9 +36,44 @@ export type Message = {
 export type Status = {
   business_service: "UP" | "DOWN";
   agent_service: "UP" | "DOWN";
+  model_provider: ModelProvider;
   model_name: string;
+  model_api_base: string;
+  api_key_configured: boolean;
   max_steps: number;
   supports_projects: boolean;
+};
+
+export type ModelProvider = "local" | "remote";
+
+export type ModelSettings = {
+  active_provider: ModelProvider;
+  active_model_name: string;
+  remote: {
+    api_base: string;
+    model_name: string;
+    api_key_configured: boolean;
+  };
+  local: {
+    api_base: string;
+    model_name: string;
+  };
+};
+
+export type ModelSettingsUpdate = {
+  active_provider: ModelProvider;
+  remote_api_base: string;
+  remote_model_name: string;
+  remote_api_key?: string;
+  local_api_base: string;
+  local_model_name: string;
+};
+
+export type ModelConnectionTest = {
+  ok: boolean;
+  provider: ModelProvider;
+  model_name: string;
+  response: string;
 };
 
 export type Project = {
@@ -243,6 +278,14 @@ export const api = {
     ),
   me: () => request<{ user: User }>("/api/v1/auth/me"),
   status: () => request<Status>("/api/v1/status"),
+  modelSettings: () => request<ModelSettings>("/api/v1/model-settings"),
+  updateModelSettings: (settings: ModelSettingsUpdate) =>
+    request<ModelSettings>("/api/v1/model-settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  testModelSettings: () =>
+    request<ModelConnectionTest>("/api/v1/model-settings/test", { method: "POST", body: "{}" }),
   listConversations: () => request<{ conversations: Conversation[] }>("/api/v1/conversations"),
   createConversation: (title = "新对话") =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {

@@ -42,13 +42,13 @@ aio_agent_framework/
 
 ## 最快启动
 
-1. 准备配置（不要提交真实密钥）：
+1. 本机体验可以直接启动，无需先创建 `.env`。部署到服务器时，再复制生产配置模板（不要提交真实密钥）：
 
 ```bash
 cp .env.example .env
 ```
 
-至少修改 `.env` 中的模型 Key、管理员密码、JWT Secret 和内部服务 Token。没有模型 Key 时，登录、会话、项目、数据库和异步失败链路仍可验证，但真正的模型任务会以 `AGENT_SERVICE_ERROR` 结束。
+服务器部署至少要修改管理员密码、JWT Secret 和内部服务 Token。模型 API Key 可以在管理员登录后的“模型设置”里填写；如果需要用环境变量自动初始化，也仍可设置 `MODEL_API_KEY`。
 
 2. 启动 PostgreSQL、Sandbox、Python 与 Java：
 
@@ -68,6 +68,24 @@ npm run dev
 打开 `http://127.0.0.1:5173`。若没有复制 `.env.example`，本地开发默认管理员为 `admin / aio-local-admin`；只用于本机演示。
 
 Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`。使用 Compose 时，在“项目工作”里打开这个容器路径；直接在宿主机运行 FastAPI 时，可以打开宿主机路径。
+
+### 在页面里切换模型
+
+使用管理员账号登录后，点击右上角当前模型即可打开“模型设置”：
+
+- `远程 API`：填写 DeepSeek 或其他 OpenAI Chat Completions 兼容接口、模型名和 API Key。
+- `本地模型`：填写宿主机上的 OpenAI 兼容地址，Compose 默认使用 `http://host.docker.internal:8010/v1`。
+- “保存并应用”会让下一次对话使用新模型；“保存并测试”会额外发起一次最小模型请求。
+
+API Key 只由浏览器发送给 Spring Boot，再通过内部令牌转发给 FastAPI。FastAPI 将它写入 Git 忽略的 `data/model-settings.json`，文件权限为 `600`；读取设置时只返回 `api_key_configured`，不会把 Key 回传到浏览器。
+
+启动仓库内置的本地 DeepSeek 兼容服务：
+
+```bash
+./scripts/run_local_deepseek_api.sh
+```
+
+它在宿主机 `8010` 端口提供接口。当前 Compose 中的 Agent 容器通过 `host.docker.internal` 访问该服务；仅在可信网络中运行这个无鉴权的本地端口。
 
 ## 本地开发
 

@@ -11,7 +11,7 @@ class OpenAICompatibleModel:
     """Minimal Chat Completions client with tool-call support."""
 
     def __init__(self, config: AgentConfig) -> None:
-        if not config.model_api_key:
+        if config.model_provider == "remote" and not config.model_api_key:
             raise RuntimeError("Missing MODEL_API_KEY or OPENAI_API_KEY.")
         self.config = config
 
@@ -35,10 +35,11 @@ class OpenAICompatibleModel:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        headers = {"Authorization": f"Bearer {self.config.model_api_key}"} if self.config.model_api_key else {}
         response = post_json(
             f"{self.config.model_api_base.rstrip('/')}/chat/completions",
             payload,
-            headers={"Authorization": f"Bearer {self.config.model_api_key}"},
+            headers=headers,
             timeout=120,
         )
         if "error" in response:

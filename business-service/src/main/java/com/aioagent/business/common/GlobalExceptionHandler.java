@@ -9,6 +9,7 @@ import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -42,6 +43,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<Map<String, Object>> handleConflict(DataIntegrityViolationException exception) {
         return response(HttpStatus.CONFLICT, "CONFLICT", "资源状态冲突，请刷新后重试", List.of());
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<Map<String, Object>> handleAccessDenied(AccessDeniedException exception) {
+        return response(HttpStatus.FORBIDDEN, "FORBIDDEN", "无访问权限", List.of());
     }
 
     @ExceptionHandler(Exception.class)

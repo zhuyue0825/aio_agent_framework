@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from agent_framework.config import AgentConfig
 from agent_framework.http_json import post_json
 from agent_framework.model import OpenAICompatibleModel
 from agent_framework.runtime import AgentRunCancelled
@@ -21,6 +20,7 @@ from agent_framework.trace import TraceLogger
 
 from .approval import ApprovalPolicy
 from .agent_runtime import AgentRuntime
+from .model_settings import ModelSettingsStore
 from .workspace import (
     WorkspaceError,
     build_workspace_tools,
@@ -35,9 +35,9 @@ from .workspace import (
 
 
 logger = logging.getLogger("aio_agent.execution_service")
-config = AgentConfig.from_env()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRACE_PATH = PROJECT_ROOT / "traces" / "app.jsonl"
+model_settings = ModelSettingsStore.from_env(PROJECT_ROOT)
 INTERNAL_SERVICE_TOKEN = os.environ.get(
     "INTERNAL_SERVICE_TOKEN",
     "local-internal-token-change-before-production",
@@ -83,6 +83,15 @@ class WorkspaceFileWriteRequest(BaseModel):
     root: str = Field(min_length=1)
     path: str = Field(min_length=1)
     content: str
+
+
+class ModelSettingsUpdateRequest(BaseModel):
+    active_provider: Literal["local", "remote"]
+    remote_api_base: str = Field(min_length=1, max_length=2_000)
+    remote_model_name: str = Field(min_length=1, max_length=200)
+    remote_api_key: str | None = Field(default=None, max_length=2_000)
+    local_api_base: str = Field(min_length=1, max_length=2_000)
+    local_model_name: str = Field(min_length=1, max_length=200)
 
 
 class CancellationRegistry:
@@ -182,12 +191,9 @@ def run_plain_chat(
 ) -> dict[str, Any]:
     should_raise_cancelled(should_cancel)
     on_event("agent.step.started", {"step": 1})
-    model = OpenAICompatibleModel(config)
+    active_config = model_settings.active_config()
+    model = OpenAICompatibleModel(active_config)
     messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": "你是 MiniMind，一个中文聊天助手。自然、清楚地回答用户；不知道时直接说明。",
-        },
         *[{"role": item.role, "content": item.content} for item in history],
         {"role": "user", "content": task},
     ]
@@ -234,8 +240,9 @@ def run_project_agent(
     root = normalize_workspace_root(request.workspace_root)
     before = snapshot_workspace(root)
     tools = build_workspace_tools(root)
+    active_config = model_settings.active_config()
     runtime = AgentRuntime(
-        config=replace(config, max_steps=request.max_steps),
+        config=replace(active_config, max_steps=request.max_steps),
         tools=tools,
         approval=ApprovalPolicy(request.approval_mode, writable_prefixes=("",)),
         trace=TraceLogger(str(TRACE_PATH), context={"trace_id": trace_id, "run_id": str(request.run_id)}),
@@ -268,13 +275,63 @@ def should_raise_cancelled(should_cancel: Any) -> None:
 
 @app.get("/internal/v1/health")
 def health() -> dict[str, Any]:
+    active_config = model_settings.active_config()
     return {
         "ok": True,
         "service": "aio-agent-execution-service",
-        "model_name": config.model_name,
-        "max_steps": config.max_steps,
+        "model_provider": active_config.model_provider,
+        "model_name": active_config.model_name,
+        "model_api_base": active_config.model_api_base,
+        "api_key_configured": bool(active_config.model_api_key),
+        "max_steps": active_config.max_steps,
         "supports_projects": True,
     }
+
+
+@app.get("/internal/v1/model-settings")
+def get_model_settings() -> dict[str, Any]:
+    return model_settings.public_view()
+
+
+@app.put("/internal/v1/model-settings")
+def update_model_settings(payload: ModelSettingsUpdateRequest) -> dict[str, Any]:
+    try:
+        return model_settings.update(
+            active_provider=payload.active_provider,
+            remote_api_base=payload.remote_api_base,
+            remote_model_name=payload.remote_model_name,
+            remote_api_key=payload.remote_api_key,
+            local_api_base=payload.local_api_base,
+            local_model_name=payload.local_model_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_MODEL_SETTINGS", "message": str(exc)}) from exc
+
+
+@app.post("/internal/v1/model-settings/test")
+def test_model_settings() -> dict[str, Any]:
+    active_config = model_settings.active_config()
+    try:
+        message = OpenAICompatibleModel(active_config).complete(
+            [
+                {"role": "system", "content": "You are a connectivity check. Reply with OK only."},
+                {"role": "user", "content": "ping"},
+            ],
+            tools=[],
+            max_tokens=32,
+            temperature=0,
+        )
+        return {
+            "ok": True,
+            "provider": active_config.model_provider,
+            "model_name": active_config.model_name,
+            "response": (message.get("content") or "").strip()[:200],
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "MODEL_CONNECTION_FAILED", "message": str(exc)},
+        ) from exc
 
 
 @app.post("/internal/v1/agent/runs")

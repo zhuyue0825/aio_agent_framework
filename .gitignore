@@ -33,6 +33,7 @@ local/
 # Runtime state and generated artifacts
 data/*.sqlite3
 data/*.sqlite3-*
+data/model-settings.json
 traces/
 screenshots/
 bundles/*

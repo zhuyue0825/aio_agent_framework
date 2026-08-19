@@ -1,4 +1,4 @@
-import { FolderCode, FolderOpen, LogOut, MessageSquare, Send, Square } from "lucide-react";
+import { Cloud, Cpu, FolderCode, FolderOpen, LogOut, MessageSquare, Send, Settings, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AppMode, Message, Status, Workspace } from "./api";
 
@@ -10,10 +10,12 @@ type ChatProps = {
   busy: boolean;
   progress: string | null;
   username: string;
+  canManageModel: boolean;
   onLogout: () => void;
   onCancel: () => void;
   onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
+  onOpenModelSettings: () => void;
   onSend: (task: string) => Promise<void>;
 };
 
@@ -37,10 +39,12 @@ export default function Chat({
   busy,
   progress,
   username,
+  canManageModel,
   onLogout,
   onCancel,
   onModeChange,
   onOpenFolder,
+  onOpenModelSettings,
   onSend,
 }: ChatProps) {
   const [draft, setDraft] = useState("");
@@ -77,6 +81,24 @@ export default function Chat({
           </button>
         </div>
         <div className="topbar-context">
+          {canManageModel ? (
+            <button
+              className="model-switch-button"
+              title="切换本地模型或远程 API"
+              disabled={busy}
+              onClick={onOpenModelSettings}
+            >
+              {status?.model_provider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
+              <span>{status?.model_provider === "local" ? "本地" : "API"}</span>
+              <strong>{status?.model_name ?? "连接中"}</strong>
+              <Settings size={14} />
+            </button>
+          ) : (
+            <span className="context-label">
+              {status?.model_provider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
+              <strong>{status?.model_name ?? "连接中"}</strong>
+            </span>
+          )}
           <div className="topbar-service-context">
             {mode === "project" ? (
               workspace ? (
@@ -90,11 +112,7 @@ export default function Chat({
                   打开文件夹
                 </button>
               )
-            ) : (
-              <span className="context-label">
-                Model <strong>{status?.model_name ?? "连接中"}</strong>
-              </span>
-            )}
+            ) : null}
           </div>
           <span className="signed-in-user" title={`当前用户：${username}`}>{username}</span>
           <button className="icon-button" title="退出登录" onClick={onLogout}>

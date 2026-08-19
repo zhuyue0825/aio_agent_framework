@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -34,6 +35,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -174,6 +176,31 @@ class BusinessServiceIntegrationTest {
         projects.addMember(opened.project().getId(), owner, member.getUsername());
         assertThat(projects.requireMember(opened.project().getId(), member).getId())
                 .isEqualTo(opened.project().getId());
+    }
+
+    @Test
+    void modelSettingsRequireAdminRoleAndNeverExposeApiKey() throws Exception {
+        when(agentService.modelSettings()).thenReturn(Map.of(
+                "active_provider", "remote",
+                "active_model_name", "deepseek-v4-flash",
+                "remote", Map.of(
+                        "api_base", "https://api.deepseek.com",
+                        "model_name", "deepseek-v4-flash",
+                        "api_key_configured", true),
+                "local", Map.of(
+                        "api_base", "http://host.docker.internal:8010/v1",
+                        "model_name", "local-deepseek")));
+
+        mockMvc.perform(get("/api/v1/model-settings")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_USER"))))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/model-settings")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active_provider").value("remote"))
+                .andExpect(jsonPath("$.remote.api_key_configured").value(true))
+                .andExpect(jsonPath("$.remote.api_key").doesNotExist());
     }
 
     @Test

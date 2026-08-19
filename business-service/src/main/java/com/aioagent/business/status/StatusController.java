@@ -22,7 +22,10 @@ public class StatusController {
         return Map.of(
                 "business_service", "UP",
                 "agent_service", agent.ok() ? "UP" : "DOWN",
+                "model_provider", agent.modelProvider(),
                 "model_name", agent.modelName(),
+                "model_api_base", agent.modelApiBase(),
+                "api_key_configured", agent.apiKeyConfigured(),
                 "max_steps", agent.maxSteps(),
                 "supports_projects", agent.supportsProjects());
     }

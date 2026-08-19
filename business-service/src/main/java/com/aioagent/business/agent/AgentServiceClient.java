@@ -66,6 +66,40 @@ public class AgentServiceClient {
         }
     }
 
+    public Map<String, Object> modelSettings() {
+        try {
+            return client.get().uri("/internal/v1/model-settings").retrieve().body(MAP_TYPE);
+        } catch (RestClientException exception) {
+            throw wrap("Model settings request failed", exception);
+        }
+    }
+
+    public Map<String, Object> updateModelSettings(Map<String, Object> settings) {
+        try {
+            return client.put()
+                    .uri("/internal/v1/model-settings")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(settings)
+                    .retrieve()
+                    .body(MAP_TYPE);
+        } catch (RestClientException exception) {
+            throw wrap("Model settings update failed", exception);
+        }
+    }
+
+    public Map<String, Object> testModelSettings() {
+        try {
+            return client.post()
+                    .uri("/internal/v1/model-settings/test")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of())
+                    .retrieve()
+                    .body(MAP_TYPE);
+        } catch (RestClientException exception) {
+            throw wrap("Model connection test failed", exception);
+        }
+    }
+
     public void cancel(UUID runId, String traceId) {
         try {
             client.delete()
@@ -153,7 +187,10 @@ public class AgentServiceClient {
     public record HealthResponse(
             boolean ok,
             String service,
+            String modelProvider,
             String modelName,
+            String modelApiBase,
+            boolean apiKeyConfigured,
             int maxSteps,
             boolean supportsProjects) {
     }
