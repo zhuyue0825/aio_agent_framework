@@ -103,6 +103,34 @@ def test_workspace_symlink_cannot_escape_project(tmp_path: Path) -> None:
         raise AssertionError("symlink escape should be rejected")
 
 
+def test_workspace_relative_path_rejects_absolute_and_parent_escape(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    for unsafe_path in (str(root / "inside.txt"), "../outside.txt"):
+        try:
+            resolve_workspace_path(root, unsafe_path, must_exist=False)
+        except WorkspaceError:
+            pass
+        else:
+            raise AssertionError(f"unsafe workspace path should be rejected: {unsafe_path}")
+
+
+def test_workspace_root_rejects_sibling_with_same_prefix(tmp_path: Path, monkeypatch) -> None:
+    allowed = tmp_path / "workspace"
+    sibling = tmp_path / "workspace-private"
+    allowed.mkdir()
+    sibling.mkdir()
+    monkeypatch.setenv("AIO_ALLOWED_WORKSPACE_ROOTS", str(allowed))
+
+    try:
+        normalize_workspace_root(str(sibling))
+    except WorkspaceError as exc:
+        assert "允许" in str(exc)
+    else:
+        raise AssertionError("a sibling that only shares the allowed prefix must be rejected")
+
+
 def test_multi_tenant_workspace_rejects_another_owner_root(tmp_path: Path, monkeypatch) -> None:
     owner_a = "11111111-1111-1111-1111-111111111111"
     owner_b = "22222222-2222-2222-2222-222222222222"

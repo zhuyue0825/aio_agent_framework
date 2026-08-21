@@ -123,30 +123,54 @@ def _failure(message: str, error: str, hint: str | None = None) -> dict[str, Any
 
 
 def normalize_workspace_root(path: str, owner_id: str | None = None) -> Path:
-    if not path.strip():
+    requested_path = path.strip()
+    if not requested_path:
         raise WorkspaceError("文件夹路径不能为空")
     try:
-        root = Path(path).expanduser().resolve(strict=True)
-    except OSError as exc:
+        normalized_path = os.path.realpath(os.path.expanduser(requested_path))
+    except (OSError, ValueError) as exc:
         raise WorkspaceError("文件夹不存在或不可访问") from exc
-    if not root.is_dir():
-        raise WorkspaceError("所选路径不是文件夹")
-    if workspace_boundary(root, owner_id) is None:
-        raise WorkspaceError("该目录不在允许的工作区范围内")
-    if not os.access(root, os.R_OK):
-        raise WorkspaceError("文件夹不可读")
-    return root
+
+    tenant = tenant_workspace_root(owner_id, create=True)
+    boundaries = (tenant,) if tenant is not None else allowed_workspace_roots()
+    for boundary in boundaries:
+        boundary_path = os.path.realpath(os.fspath(boundary))
+        boundary_prefix = boundary_path.rstrip(os.sep) + os.sep
+        if normalized_path == boundary_path:
+            safe_path = boundary_path
+        else:
+            if not normalized_path.startswith(boundary_prefix):
+                continue
+            safe_path = normalized_path
+
+        root = Path(safe_path)
+        if not root.is_dir():
+            raise WorkspaceError("所选路径不是文件夹")
+        if not os.access(root, os.R_OK):
+            raise WorkspaceError("文件夹不可读")
+        return root
+
+    raise WorkspaceError("该目录不在允许的工作区范围内")
 
 
 def resolve_workspace_path(root: Path, relative_path: str, *, must_exist: bool = True) -> Path:
-    candidate = Path(relative_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    resolved = candidate.resolve(strict=False)
+    if os.path.isabs(relative_path):
+        raise WorkspaceError("项目文件必须使用相对路径")
     try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise WorkspaceError("路径超出当前项目文件夹") from exc
+        root_path = os.path.realpath(os.fspath(root))
+        normalized_path = os.path.realpath(os.path.join(root_path, relative_path))
+    except (OSError, ValueError) as exc:
+        raise WorkspaceError("项目文件路径无效") from exc
+
+    root_prefix = root_path.rstrip(os.sep) + os.sep
+    if normalized_path == root_path:
+        safe_path = root_path
+    else:
+        if not normalized_path.startswith(root_prefix):
+            raise WorkspaceError("路径超出当前项目文件夹")
+        safe_path = normalized_path
+
+    resolved = Path(safe_path)
     if must_exist and not resolved.exists():
         raise WorkspaceError(f"文件不存在: {relative_path}")
     return resolved
