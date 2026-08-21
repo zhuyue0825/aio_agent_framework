@@ -73,13 +73,14 @@ public class ProjectController {
             @RequestParam(required = false) String path,
             Authentication authentication) {
         currentUser.require(authentication);
-        return agentService.listDirectories(path);
+        UserAccount user = currentUser.require(authentication);
+        return agentService.listDirectories(path, user.getId());
     }
 
     @GetMapping("/projects/{projectId}/workspace/tree")
     public Map<String, Object> tree(@PathVariable UUID projectId, Authentication authentication) {
         Project project = projectService.requireMember(projectId, currentUser.require(authentication));
-        return agentService.workspaceTree(project.getWorkspaceRoot());
+        return agentService.workspaceTree(project.getWorkspaceRoot(), project.getOwner().getId());
     }
 
     @GetMapping("/projects/{projectId}/workspace/file")
@@ -88,7 +89,7 @@ public class ProjectController {
             @RequestParam String path,
             Authentication authentication) {
         Project project = projectService.requireMember(projectId, currentUser.require(authentication));
-        return agentService.workspaceFile(project.getWorkspaceRoot(), path);
+        return agentService.workspaceFile(project.getWorkspaceRoot(), path, project.getOwner().getId());
     }
 
     @PutMapping("/projects/{projectId}/workspace/file")
@@ -97,7 +98,11 @@ public class ProjectController {
             @Valid @RequestBody SaveFileRequest request,
             Authentication authentication) {
         Project project = projectService.requireMember(projectId, currentUser.require(authentication));
-        return agentService.saveWorkspaceFile(project.getWorkspaceRoot(), request.path(), request.content());
+        return agentService.saveWorkspaceFile(
+                project.getWorkspaceRoot(),
+                request.path(),
+                request.content(),
+                project.getOwner().getId());
     }
 
     public record OpenWorkspaceRequest(@NotBlank String path) {

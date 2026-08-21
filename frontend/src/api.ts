@@ -134,7 +134,22 @@ export type AgentRun = {
   trace_id: string;
   final_answer: string | null;
   steps: number | null;
+  model_provider: string | null;
+  model_name: string | null;
+  model_request_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  model_latency_ms: number;
+  attempt_count: number;
   changed_files: string[];
+  proposed_changes: Array<{
+    path: string;
+    original_sha256: string;
+    content: string;
+    diff: string;
+  }>;
+  change_status: "NONE" | "PROPOSED" | "APPLIED" | "REJECTED";
+  changes_applied_at: string | null;
   error_code: string | null;
   error_message: string | null;
   created_at: string;
@@ -150,8 +165,23 @@ export type RunEvent = {
   created_at: string;
 };
 
-const TOKEN_STORAGE_KEY = "aio-agent-access-token";
-let accessToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+export type ConversationPage = {
+  conversations: Conversation[];
+  page: number;
+  size: number;
+  total: number;
+  has_more: boolean;
+};
+
+export type MessagePage = {
+  messages: Message[];
+  page: number;
+  size: number;
+  has_more: boolean;
+};
+
+let accessToken: string | null = null;
+let refreshPromise: Promise<AuthResponse> | null = null;
 
 export class ApiError extends Error {
   constructor(
@@ -166,8 +196,6 @@ export class ApiError extends Error {
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
-  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  else localStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
 export function hasAccessToken() {
@@ -182,9 +210,32 @@ function notifyExpiredSession(status: number) {
   if (status === 401 && accessToken) window.dispatchEvent(new Event("aio-agent-auth-expired"));
 }
 
-async function request<T>(url: string, options?: RequestInit, authenticated = true): Promise<T> {
+async function refreshAccessToken(): Promise<AuthResponse> {
+  if (!refreshPromise) {
+    refreshPromise = fetch("/api/v1/auth/refresh", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new ApiError("登录会话已过期", response.status, data.error?.code ?? data.detail?.code);
+        const session = data as AuthResponse;
+        setAccessToken(session.access_token);
+        return session;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+async function request<T>(url: string, options?: RequestInit, authenticated = true, retry = true): Promise<T> {
   const response = await fetch(url, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(authenticated ? authenticationHeaders() : {}),
@@ -193,7 +244,14 @@ async function request<T>(url: string, options?: RequestInit, authenticated = tr
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    notifyExpiredSession(response.status);
+    if (response.status === 401 && authenticated && retry && !url.endsWith("/auth/logout")) {
+      try {
+        await refreshAccessToken();
+        return request<T>(url, options, authenticated, false);
+      } catch {
+        notifyExpiredSession(response.status);
+      }
+    }
     const error = data.error ?? data.detail;
     const message = typeof error === "string" ? error : error?.message;
     throw new ApiError(message || `HTTP ${response.status}`, response.status, error?.code, error?.trace_id);
@@ -220,32 +278,55 @@ async function streamRunEvents(
   onEvent: (event: RunEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`/api/v1/runs/${runId}/events`, {
-    headers: { Accept: "text/event-stream", ...authenticationHeaders() },
-    signal,
-  });
-  if (!response.ok) {
-    notifyExpiredSession(response.status);
-    const traceId = response.headers.get("X-Trace-Id") ?? undefined;
-    throw new ApiError(`SSE HTTP ${response.status}`, response.status, undefined, traceId);
-  }
-  if (!response.body) throw new Error("浏览器不支持流式任务进度");
+  let lastEventId = 0;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(`/api/v1/runs/${runId}/events`, {
+        headers: {
+          Accept: "text/event-stream",
+          ...authenticationHeaders(),
+          ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {}),
+        },
+        credentials: "include",
+        signal,
+      });
+      if (response.status === 401 && attempt === 0) {
+        await refreshAccessToken();
+        continue;
+      }
+      if (!response.ok) {
+        notifyExpiredSession(response.status);
+        const traceId = response.headers.get("X-Trace-Id") ?? undefined;
+        throw new ApiError(`SSE HTTP ${response.status}`, response.status, undefined, traceId);
+      }
+      if (!response.body) throw new Error("浏览器不支持流式任务进度");
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
-    let separator = buffer.indexOf("\n\n");
-    while (separator >= 0) {
-      const event = parseSseBlock(buffer.slice(0, separator));
-      buffer = buffer.slice(separator + 2);
-      if (event) onEvent(event);
-      separator = buffer.indexOf("\n\n");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+        let separator = buffer.indexOf("\n\n");
+        while (separator >= 0) {
+          const event = parseSseBlock(buffer.slice(0, separator));
+          buffer = buffer.slice(separator + 2);
+          if (event) {
+            lastEventId = Math.max(lastEventId, event.id);
+            onEvent(event);
+          }
+          separator = buffer.indexOf("\n\n");
+        }
+        if (done) return;
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      lastError = error;
+      await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
     }
-    if (done) break;
   }
+  throw lastError instanceof Error ? lastError : new Error("任务进度流重连失败");
 }
 
 async function waitForRun(runId: string, signal?: AbortSignal): Promise<AgentRun> {
@@ -282,6 +363,8 @@ export const api = {
       { method: "POST", body: JSON.stringify({ username, password }) },
       false,
     ),
+  restoreSession: refreshAccessToken,
+  logout: () => request<{ ok: true }>("/api/v1/auth/logout", { method: "POST", body: "{}" }, true, false),
   me: () => request<{ user: User }>("/api/v1/auth/me"),
   status: () => request<Status>("/api/v1/status"),
   modelSettings: () => request<ModelSettings>("/api/v1/model-settings"),
@@ -292,7 +375,8 @@ export const api = {
     }),
   testModelSettings: () =>
     request<ModelConnectionTest>("/api/v1/model-settings/test", { method: "POST", body: "{}" }),
-  listConversations: () => request<{ conversations: Conversation[] }>("/api/v1/conversations"),
+  listConversations: (page = 0, size = 50) =>
+    request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
   createConversation: (title = "新对话") =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {
       method: "POST",
@@ -300,8 +384,8 @@ export const api = {
     }),
   deleteConversation: (id: string) =>
     request<{ ok: true }>(`/api/v1/conversations/${id}`, { method: "DELETE" }),
-  listMessages: (conversationId: string) =>
-    request<{ messages: Message[] }>(`/api/v1/conversations/${conversationId}/messages`),
+  listMessages: (conversationId: string, page = 0, size = 100) =>
+    request<MessagePage>(`/api/v1/conversations/${conversationId}/messages?page=${page}&size=${size}`),
   createRun: (conversationId: string, task: string, mode: AppMode, projectId?: string) =>
     request<{ run: AgentRun }>(`/api/v1/conversations/${conversationId}/runs`, {
       method: "POST",
@@ -315,7 +399,15 @@ export const api = {
       }),
     }),
   getRun: (runId: string) => request<{ run: AgentRun }>(`/api/v1/runs/${runId}`),
+  listRunEvents: (runId: string, after = 0, size = 100) =>
+    request<{ events: RunEvent[]; has_more: boolean; next_after: number }>(
+      `/api/v1/runs/${runId}/event-history?after=${after}&size=${size}`,
+    ),
   cancelRun: (runId: string) => request<{ run: AgentRun }>(`/api/v1/runs/${runId}`, { method: "DELETE" }),
+  applyRunChanges: (runId: string) =>
+    request<{ run: AgentRun }>(`/api/v1/runs/${runId}/changes/apply`, { method: "POST", body: "{}" }),
+  rejectRunChanges: (runId: string) =>
+    request<{ run: AgentRun }>(`/api/v1/runs/${runId}/changes/reject`, { method: "POST", body: "{}" }),
   streamRunEvents,
   waitForRun,
   listProjects: () => request<{ projects: Project[] }>("/api/v1/projects"),

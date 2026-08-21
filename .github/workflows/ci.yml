@@ -30,7 +30,39 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+      - run: npm test
       - run: npm run build
+
+  frontend-e2e:
+    name: Frontend Playwright flow
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
 
   python:
     name: Python contract tests
@@ -70,6 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POSTGRES_PASSWORD: ci-database-password-not-a-secret
+      REDIS_PASSWORD: ci-redis-password-not-a-secret
       AIO_JWT_SECRET: ci-jwt-secret-with-at-least-thirty-two-characters
       INTERNAL_SERVICE_TOKEN: ci-internal-token-with-at-least-thirty-two-characters
       AIO_BOOTSTRAP_ADMIN_PASSWORD: ci-admin-password

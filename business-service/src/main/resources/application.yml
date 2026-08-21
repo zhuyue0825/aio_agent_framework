@@ -1,6 +1,7 @@
 server:
   port: ${SERVER_PORT:8081}
   shutdown: graceful
+  forward-headers-strategy: framework
 
 spring:
   application:
@@ -19,14 +20,34 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
+      repositories:
+        enabled: false
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
 
 app:
+  redis:
+    enabled: ${AIO_REDIS_ENABLED:false}
+    key-prefix: ${AIO_REDIS_KEY_PREFIX:aio}
+    run-stream: ${AIO_REDIS_RUN_STREAM:aio:agent-runs}
+    run-group: ${AIO_REDIS_RUN_GROUP:aio-business}
+    event-channel: ${AIO_REDIS_EVENT_CHANNEL:aio:run-events}
   security:
     jwt-secret: ${AIO_JWT_SECRET}
-    token-ttl: ${AIO_TOKEN_TTL:12h}
+    token-ttl: ${AIO_TOKEN_TTL:15m}
+    refresh-token-ttl: ${AIO_REFRESH_TOKEN_TTL:30d}
+    password-reset-ttl: ${AIO_PASSWORD_RESET_TTL:30m}
+    refresh-cookie-secure: ${AIO_REFRESH_COOKIE_SECURE:false}
+    login-attempts-per-minute: ${AIO_LOGIN_ATTEMPTS_PER_MINUTE:10}
+    runs-per-minute: ${AIO_RUNS_PER_MINUTE:20}
+    daily-token-limit: ${AIO_DAILY_TOKEN_LIMIT:200000}
     public-registration-enabled: ${AIO_PUBLIC_REGISTRATION_ENABLED:false}
   agent:
     base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}
@@ -34,6 +55,8 @@ app:
     internal-token: ${INTERNAL_SERVICE_TOKEN}
     connect-timeout: ${AGENT_CONNECT_TIMEOUT:3s}
     read-timeout: ${AGENT_READ_TIMEOUT:3m}
+    recovery-stale-after: ${AGENT_RECOVERY_STALE_AFTER:4m}
+    recovery-sweep-interval: ${AGENT_RECOVERY_SWEEP_INTERVAL:30s}
   bootstrap:
     admin-username: ${AIO_BOOTSTRAP_ADMIN_USERNAME:admin}
     admin-password: ${AIO_BOOTSTRAP_ADMIN_PASSWORD}
@@ -43,6 +66,9 @@ app:
     owner-username: ${AIO_LEGACY_OWNER_USERNAME:admin}
 
 management:
+  health:
+    redis:
+      enabled: ${AIO_REDIS_ENABLED:false}
   endpoints:
     web:
       exposure:

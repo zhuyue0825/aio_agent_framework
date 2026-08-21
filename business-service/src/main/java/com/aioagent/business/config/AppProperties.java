@@ -10,6 +10,7 @@ public class AppProperties {
     private final Agent agent = new Agent();
     private final Bootstrap bootstrap = new Bootstrap();
     private final LegacyImport legacyImport = new LegacyImport();
+    private final Redis redis = new Redis();
 
     public Security getSecurity() {
         return security;
@@ -27,9 +28,19 @@ public class AppProperties {
         return legacyImport;
     }
 
+    public Redis getRedis() {
+        return redis;
+    }
+
     public static class Security {
         private String jwtSecret;
-        private Duration tokenTtl = Duration.ofHours(12);
+        private Duration tokenTtl = Duration.ofMinutes(15);
+        private Duration refreshTokenTtl = Duration.ofDays(30);
+        private Duration passwordResetTtl = Duration.ofMinutes(30);
+        private boolean refreshCookieSecure;
+        private int loginAttemptsPerMinute = 10;
+        private int runsPerMinute = 20;
+        private long dailyTokenLimit = 200_000;
         private boolean publicRegistrationEnabled;
 
         public String getJwtSecret() {
@@ -55,6 +66,54 @@ public class AppProperties {
         public void setPublicRegistrationEnabled(boolean publicRegistrationEnabled) {
             this.publicRegistrationEnabled = publicRegistrationEnabled;
         }
+
+        public Duration getRefreshTokenTtl() {
+            return refreshTokenTtl;
+        }
+
+        public void setRefreshTokenTtl(Duration refreshTokenTtl) {
+            this.refreshTokenTtl = refreshTokenTtl;
+        }
+
+        public Duration getPasswordResetTtl() {
+            return passwordResetTtl;
+        }
+
+        public void setPasswordResetTtl(Duration passwordResetTtl) {
+            this.passwordResetTtl = passwordResetTtl;
+        }
+
+        public boolean isRefreshCookieSecure() {
+            return refreshCookieSecure;
+        }
+
+        public void setRefreshCookieSecure(boolean refreshCookieSecure) {
+            this.refreshCookieSecure = refreshCookieSecure;
+        }
+
+        public int getLoginAttemptsPerMinute() {
+            return loginAttemptsPerMinute;
+        }
+
+        public void setLoginAttemptsPerMinute(int loginAttemptsPerMinute) {
+            this.loginAttemptsPerMinute = loginAttemptsPerMinute;
+        }
+
+        public int getRunsPerMinute() {
+            return runsPerMinute;
+        }
+
+        public void setRunsPerMinute(int runsPerMinute) {
+            this.runsPerMinute = runsPerMinute;
+        }
+
+        public long getDailyTokenLimit() {
+            return dailyTokenLimit;
+        }
+
+        public void setDailyTokenLimit(long dailyTokenLimit) {
+            this.dailyTokenLimit = dailyTokenLimit;
+        }
     }
 
     public static class Agent {
@@ -63,6 +122,7 @@ public class AppProperties {
         private String internalToken;
         private Duration connectTimeout = Duration.ofSeconds(3);
         private Duration readTimeout = Duration.ofMinutes(3);
+        private Duration recoveryStaleAfter = Duration.ofMinutes(4);
 
         public String getBaseUrl() {
             return baseUrl;
@@ -102,6 +162,14 @@ public class AppProperties {
 
         public void setReadTimeout(Duration readTimeout) {
             this.readTimeout = readTimeout;
+        }
+
+        public Duration getRecoveryStaleAfter() {
+            return recoveryStaleAfter;
+        }
+
+        public void setRecoveryStaleAfter(Duration recoveryStaleAfter) {
+            this.recoveryStaleAfter = recoveryStaleAfter;
         }
     }
 
@@ -153,6 +221,54 @@ public class AppProperties {
 
         public void setOwnerUsername(String ownerUsername) {
             this.ownerUsername = ownerUsername;
+        }
+    }
+
+    public static class Redis {
+        private boolean enabled;
+        private String keyPrefix = "aio";
+        private String runStream = "aio:agent-runs";
+        private String runGroup = "aio-business";
+        private String eventChannel = "aio:run-events";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getKeyPrefix() {
+            return keyPrefix;
+        }
+
+        public void setKeyPrefix(String keyPrefix) {
+            this.keyPrefix = keyPrefix;
+        }
+
+        public String getRunStream() {
+            return runStream;
+        }
+
+        public void setRunStream(String runStream) {
+            this.runStream = runStream;
+        }
+
+        public String getRunGroup() {
+            return runGroup;
+        }
+
+        public void setRunGroup(String runGroup) {
+            this.runGroup = runGroup;
+        }
+
+        public String getEventChannel() {
+            return eventChannel;
+        }
+
+        public void setEventChannel(String eventChannel) {
+            this.eventChannel = eventChannel;
         }
     }
 }

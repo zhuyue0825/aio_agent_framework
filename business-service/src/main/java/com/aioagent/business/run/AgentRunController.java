@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
@@ -37,22 +38,25 @@ public class AgentRunController {
 
     private final CurrentUser currentUser;
     private final AgentRunService runs;
-    private final AgentRunExecutor executor;
+    private final AgentRunRecovery recovery;
     private final AgentServiceClient agentService;
+    private final AgentCancellationPublisher cancellationPublisher;
     private final SseRunEventHub eventHub;
     private final ObjectMapper mapper;
 
     public AgentRunController(
             CurrentUser currentUser,
             AgentRunService runs,
-            AgentRunExecutor executor,
+            AgentRunRecovery recovery,
             AgentServiceClient agentService,
+            AgentCancellationPublisher cancellationPublisher,
             SseRunEventHub eventHub,
             ObjectMapper mapper) {
         this.currentUser = currentUser;
         this.runs = runs;
-        this.executor = executor;
+        this.recovery = recovery;
         this.agentService = agentService;
+        this.cancellationPublisher = cancellationPublisher;
         this.eventHub = eventHub;
         this.mapper = mapper;
     }
@@ -77,7 +81,7 @@ public class AgentRunController {
                 idempotencyKey,
                 traceId);
         if (result.created()) {
-            executor.execute(result.run().getId());
+            recovery.submit(result.run().getId());
         }
         RunDtos.RunResponse response = RunDtos.RunResponse.from(result.run(), mapper);
         if (!result.created()) {
@@ -98,6 +102,7 @@ public class AgentRunController {
     public Map<String, RunDtos.RunResponse> cancel(@PathVariable UUID runId, Authentication authentication) {
         AgentRun run = runs.cancel(currentUser.require(authentication), runId);
         if (run.getStatus() == RunStatus.CANCELLED) {
+            cancellationPublisher.publish(runId);
             try {
                 agentService.cancel(runId, run.getTraceId());
             } catch (Exception ignored) {
@@ -107,10 +112,53 @@ public class AgentRunController {
         return Map.of("run", RunDtos.RunResponse.from(run, mapper));
     }
 
+    @PostMapping("/runs/{runId}/changes/apply")
+    public Map<String, RunDtos.RunResponse> applyChanges(
+            @PathVariable UUID runId,
+            Authentication authentication) {
+        AgentRun run = runs.applyProposedChanges(currentUser.require(authentication), runId, agentService);
+        return Map.of("run", RunDtos.RunResponse.from(run, mapper));
+    }
+
+    @PostMapping("/runs/{runId}/changes/reject")
+    public Map<String, RunDtos.RunResponse> rejectChanges(
+            @PathVariable UUID runId,
+            Authentication authentication) {
+        AgentRun run = runs.rejectProposedChanges(currentUser.require(authentication), runId);
+        return Map.of("run", RunDtos.RunResponse.from(run, mapper));
+    }
+
     @GetMapping(value = "/runs/{runId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter events(@PathVariable UUID runId, Authentication authentication) {
+    public SseEmitter events(
+            @PathVariable UUID runId,
+            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
+            Authentication authentication) {
         AgentRun run = runs.require(currentUser.require(authentication), runId);
-        return eventHub.subscribe(run);
+        long after = 0L;
+        if (lastEventId != null) {
+            try {
+                after = Math.max(0L, Long.parseLong(lastEventId));
+            } catch (NumberFormatException ignored) {
+                after = 0L;
+            }
+        }
+        return eventHub.subscribe(run, after);
+    }
+
+    @GetMapping("/runs/{runId}/event-history")
+    public Map<String, Object> eventHistory(
+            @PathVariable UUID runId,
+            @RequestParam(defaultValue = "0") @Min(0) long after,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size,
+            Authentication authentication) {
+        var events = runs.listEvents(currentUser.require(authentication), runId, after, size + 1);
+        boolean hasMore = events.size() > size;
+        var page = hasMore ? events.subList(0, size) : events;
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("events", page.stream().map(event -> RunDtos.RunEventResponse.from(event, mapper)).toList());
+        response.put("has_more", hasMore);
+        response.put("next_after", page.isEmpty() ? after : page.get(page.size() - 1).getId());
+        return response;
     }
 
     private ConversationMode parseMode(String value) {

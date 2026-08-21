@@ -9,6 +9,8 @@ import com.aioagent.business.run.RunStatus;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +39,18 @@ public class ConversationService {
         List<Conversation> result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(user.getId());
         if (result.isEmpty()) {
             result = List.of(conversations.save(new Conversation(user, null, "新对话", ConversationMode.CHAT)));
+        }
+        return result;
+    }
+
+    @Transactional
+    public Page<Conversation> listOrCreate(UserAccount user, int page, int size) {
+        Page<Conversation> result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(
+                user.getId(),
+                PageRequest.of(page, size));
+        if (page == 0 && result.isEmpty()) {
+            conversations.save(new Conversation(user, null, "新对话", ConversationMode.CHAT));
+            result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(user.getId(), PageRequest.of(0, size));
         }
         return result;
     }
@@ -77,6 +91,14 @@ public class ConversationService {
     public List<Message> listMessages(UserAccount user, UUID conversationId) {
         require(user, conversationId);
         return messages.findAllByConversationIdOrderByCreatedAtAscIdAsc(conversationId);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Message> listRecentMessages(UserAccount user, UUID conversationId, int page, int size) {
+        require(user, conversationId);
+        return messages.findAllByConversationIdOrderByCreatedAtDescIdDesc(
+                conversationId,
+                PageRequest.of(page, size));
     }
 
     public long messageCount(UUID conversationId) {

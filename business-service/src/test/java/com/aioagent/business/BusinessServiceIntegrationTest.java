@@ -3,10 +3,13 @@ package com.aioagent.business;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -22,11 +25,20 @@ import com.aioagent.business.conversation.ConversationService;
 import com.aioagent.business.project.ProjectService;
 import com.aioagent.business.migration.LegacySqliteImporter;
 import com.aioagent.business.run.AgentRunService;
+import com.aioagent.business.run.RunEvent;
+import com.aioagent.business.run.RunEventRepository;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import jakarta.servlet.http.Cookie;
+import org.springframework.test.web.servlet.MvcResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +47,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -82,6 +95,9 @@ class BusinessServiceIntegrationTest {
     AgentRunService runs;
 
     @Autowired
+    RunEventRepository runEvents;
+
+    @Autowired
     ProjectService projects;
 
     @Autowired
@@ -101,7 +117,7 @@ class BusinessServiceIntegrationTest {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(1);
+        assertThat(migrationCount).isEqualTo(4);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
@@ -136,6 +152,75 @@ class BusinessServiceIntegrationTest {
         } finally {
             properties.getSecurity().setPublicRegistrationEnabled(true);
         }
+    }
+
+    @Test
+    void refreshTokenRotatesAndCannotBeReplayed() throws Exception {
+        MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"integration-admin","password":"integration-password"}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie first = login.getResponse().getCookie("aio_refresh_token");
+        assertThat(first).isNotNull();
+        assertThat(first.isHttpOnly()).isTrue();
+
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(first).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.access_token").isNotEmpty());
+
+        mockMvc.perform(post("/api/v1/auth/refresh").cookie(first).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REFRESH_TOKEN"));
+    }
+
+    @Test
+    void logoutRevokesCurrentAccessAndRefreshTokens() throws Exception {
+        MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"integration-admin","password":"integration-password"}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie refresh = login.getResponse().getCookie("aio_refresh_token");
+        String access = com.jayway.jsonpath.JsonPath.read(login.getResponse().getContentAsString(), "$.access_token");
+
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .cookie(refresh)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + access)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/conversations")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + access))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(refresh)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void passwordResetChangesCredentialsAndRevokesExistingRefreshTokens() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "reset-user-" + suffix;
+        AuthService.AuthResult original = authService.register(username, "password-1234");
+        AuthService.ResetToken reset = authService.issuePasswordReset(username);
+
+        authService.resetPassword(reset.value(), "password-5678");
+
+        assertThatThrownBy(() -> authService.refresh(original.refreshToken()))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("登录会话无效");
+        assertThatThrownBy(() -> authService.login(username, "password-1234"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("用户名或密码错误");
+        assertThat(authService.login(username, "password-5678").user().getUsername()).isEqualTo(username);
     }
 
     @Test
@@ -179,13 +264,101 @@ class BusinessServiceIntegrationTest {
                         "trace-integration-002"))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("已有运行中的任务");
+
+        UserAccount other = authService.register("other-run-user", "password-1234").user();
+        assertThatThrownBy(() -> runs.require(other, first.run().getId()))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("不存在");
+    }
+
+    @Test
+    void concurrentRunCreationAllowsOnlyOneActiveRunPerConversation() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("parallel-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "并发测试", null, ConversationMode.CHAT);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Object>> futures = java.util.stream.IntStream.range(0, 2)
+                    .mapToObj(index -> executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        try {
+                            return runs.create(
+                                    user,
+                                    conversation.getId(),
+                                    "并发任务 " + index,
+                                    ConversationMode.CHAT,
+                                    null,
+                                    "auto",
+                                    8,
+                                    "parallel-key-" + suffix + "-" + index,
+                                    "parallel-trace-" + index);
+                        } catch (ApiException exception) {
+                            return exception;
+                        }
+                    }))
+                    .toList();
+            ready.await();
+            start.countDown();
+            List<Object> results = futures.stream().map(future -> {
+                try {
+                    return future.get();
+                } catch (Exception exception) {
+                    throw new AssertionError(exception);
+                }
+            }).toList();
+
+            assertThat(results.stream().filter(AgentRunService.CreateResult.class::isInstance).count()).isEqualTo(1);
+            assertThat(results.stream().filter(ApiException.class::isInstance).count()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void sseReconnectReplaysOnlyEventsAfterLastEventId() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("sse-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "SSE 重连", null, ConversationMode.CHAT);
+        var run = runs.create(
+                user,
+                conversation.getId(),
+                "测试重连",
+                ConversationMode.CHAT,
+                null,
+                "auto",
+                8,
+                "sse-key-" + suffix,
+                "sse-trace-" + suffix).run();
+        runs.cancel(user, run.getId());
+        List<RunEvent> history = runEvents.findAllByRunIdOrderByIdAsc(run.getId());
+        assertThat(history).hasSize(2);
+
+        MvcResult stream = mockMvc.perform(get("/api/v1/runs/{runId}/events", run.getId())
+                        .header("Last-Event-ID", history.get(0).getId())
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String body = mockMvc.perform(asyncDispatch(stream))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(body).contains("id:" + history.get(1).getId(), "event:run.cancelled");
+        assertThat(body).doesNotContain("id:" + history.get(0).getId() + "\n");
     }
 
     @Test
     void projectMembershipProtectsWorkspaceBusinessOperations() {
         UserAccount owner = authService.register("project-owner", "password-1234").user();
         UserAccount member = authService.register("project-member", "password-1234").user();
-        when(agentService.openWorkspace(anyString())).thenReturn(Map.of(
+        when(agentService.openWorkspace(anyString(), any(UUID.class))).thenReturn(Map.of(
                 "workspace",
                 Map.of("root", "/workspace/demo", "name", "demo", "tree", java.util.List.of())));
 
