@@ -18,6 +18,7 @@ import {
 } from "./api";
 import AuthScreen from "./AuthScreen";
 import Chat from "./Chat";
+import ChangeProposalPanel from "./ChangeProposalPanel";
 import CodePreview from "./CodePreview";
 import FolderPicker from "./FolderPicker";
 import ModelSettingsDialog from "./ModelSettingsDialog";
@@ -74,6 +75,9 @@ export default function App() {
   const [savingFile, setSavingFile] = useState(false);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [runProgress, setRunProgress] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState("");
+  const [proposalRun, setProposalRun] = useState<AgentRun | null>(null);
+  const [proposalBusy, setProposalBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
 
@@ -174,6 +178,8 @@ export default function App() {
     setSelectedFile(null);
     setActiveRun(null);
     setRunProgress(null);
+    setStreamingText("");
+    setProposalRun(null);
     setModelSettingsOpen(false);
   }
 
@@ -185,12 +191,8 @@ export default function App() {
     };
     window.addEventListener("aio-agent-auth-expired", expireSession);
     void (async () => {
-      if (!hasAccessToken()) {
-        setAuthReady(true);
-        return;
-      }
       try {
-        const restored = await api.me();
+        const restored = hasAccessToken() ? await api.me() : await api.restoreSession();
         setUser(restored.user);
         await initializeAuthenticatedApp();
       } catch {
@@ -247,6 +249,7 @@ export default function App() {
     }
     setToast(null);
     setRunProgress("正在创建任务");
+    setStreamingText("");
     const abortController = new AbortController();
     runAbortRef.current = abortController;
     try {
@@ -257,7 +260,12 @@ export default function App() {
       try {
         await api.streamRunEvents(
           created.run.id,
-          (event) => setRunProgress(progressText(event)),
+          (event) => {
+            setRunProgress(progressText(event));
+            if (event.event_type === "agent.token.delta" && typeof event.payload.delta === "string") {
+              setStreamingText((current) => current + String(event.payload.delta));
+            }
+          },
           abortController.signal,
         );
         finalRun = (await api.getRun(created.run.id)).run;
@@ -283,6 +291,9 @@ export default function App() {
         throw new Error(finalRun.error_message || "Agent 任务执行失败");
       }
       if (finalRun.status === "CANCELLED") setToast("任务已取消");
+      if (finalRun.change_status === "PROPOSED" && finalRun.proposed_changes.length) {
+        setProposalRun(finalRun);
+      }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         setToast(err instanceof Error ? err.message : String(err));
@@ -292,6 +303,39 @@ export default function App() {
       runAbortRef.current = null;
       setActiveRun(null);
       setRunProgress(null);
+      setStreamingText("");
+    }
+  }
+
+  async function applyProposedChanges() {
+    if (!proposalRun) return;
+    setProposalBusy(true);
+    try {
+      const { run } = await api.applyRunChanges(proposalRun.id);
+      setProposalRun(null);
+      setModifiedFiles(run.changed_files);
+      await refreshWorkspace();
+      if (run.changed_files[0]) await selectFile(run.changed_files[0]);
+      await loadMessages(currentId);
+      setToast(`已写入 ${run.changed_files.length} 个文件`);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProposalBusy(false);
+    }
+  }
+
+  async function rejectProposedChanges() {
+    if (!proposalRun) return;
+    setProposalBusy(true);
+    try {
+      await api.rejectRunChanges(proposalRun.id);
+      setProposalRun(null);
+      setToast("已拒绝 Agent 修改，项目文件未变化");
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProposalBusy(false);
     }
   }
 
@@ -299,7 +343,8 @@ export default function App() {
     if (!activeRun) return;
     setRunProgress("正在取消任务");
     try {
-      await api.cancelRun(activeRun.id);
+      const { run } = await api.cancelRun(activeRun.id);
+      if (run.status === "CANCELLED") setToast("任务已取消");
       runAbortRef.current?.abort();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
@@ -313,6 +358,11 @@ export default function App() {
       } catch {
         // Logging out still clears local credentials if the cancellation request cannot complete.
       }
+    }
+    try {
+      await api.logout();
+    } catch {
+      // Local logout still clears the access token if the server is unavailable.
     }
     clearAuthenticatedState();
   }
@@ -348,6 +398,7 @@ export default function App() {
         messages={messages}
         busy={Boolean(activeRun) || Boolean(runProgress)}
         progress={runProgress}
+        streamingText={streamingText}
         username={user.username}
         canManageModel={user.role === "ADMIN"}
         onLogout={() => void logout()}
@@ -390,6 +441,12 @@ export default function App() {
             `已切换为${settings.active_provider === "local" ? "本地模型" : "远程 API"}：${settings.active_model_name}`,
           );
         }}
+      />
+      <ChangeProposalPanel
+        run={proposalRun}
+        busy={proposalBusy}
+        onApply={() => void applyProposedChanges()}
+        onReject={() => void rejectProposedChanges()}
       />
       {toast ? (
         <div className="toast" role="alert">

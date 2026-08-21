@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,13 +20,31 @@ DEFAULT_LOCAL_API_BASE = "http://host.docker.internal:8010/v1"
 DEFAULT_LOCAL_MODEL = "local-deepseek-r1-distill-qwen-1.5b"
 
 
-def normalize_api_base(value: str) -> str:
+def normalize_api_base(
+    value: str,
+    *,
+    allow_private: bool = True,
+    allowed_hosts: set[str] | None = None,
+) -> str:
     normalized = value.strip().rstrip("/")
     parsed = urlsplit(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("模型接口地址必须是有效的 http:// 或 https:// URL")
     if parsed.username or parsed.password:
         raise ValueError("模型接口地址中不能包含用户名或密码")
+    hostname = parsed.hostname.lower()
+    if allowed_hosts is not None and not any(
+        hostname == host or hostname.endswith("." + host) for host in allowed_hosts
+    ):
+        raise ValueError("远程模型接口域名不在 MODEL_REMOTE_ALLOWED_HOSTS 白名单中")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if not allow_private and address is not None and (
+        address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
+    ):
+        raise ValueError("远程模型接口不能使用内网、回环或保留地址")
     return normalized
 
 
@@ -56,6 +75,19 @@ class ModelSettingsStore:
     def __init__(self, path: Path, base_config: AgentConfig | None = None) -> None:
         self.path = path
         self.base_config = base_config or AgentConfig.from_env()
+        self.remote_allowed_hosts = {
+            host.strip().lower()
+            for host in os.environ.get("MODEL_REMOTE_ALLOWED_HOSTS", "api.deepseek.com").split(",")
+            if host.strip()
+        }
+        self.local_allowed_hosts = {
+            host.strip().lower()
+            for host in os.environ.get(
+                "MODEL_LOCAL_ALLOWED_HOSTS",
+                "host.docker.internal,localhost,127.0.0.1",
+            ).split(",")
+            if host.strip()
+        }
         self._lock = RLock()
         self._settings = self._load_or_default()
 
@@ -72,7 +104,9 @@ class ModelSettingsStore:
             active_provider=active_provider,
             remote=ModelProfile(
                 api_base=normalize_api_base(
-                    os.environ.get("MODEL_REMOTE_API_BASE", self.base_config.model_api_base)
+                    os.environ.get("MODEL_REMOTE_API_BASE", self.base_config.model_api_base),
+                    allow_private=False,
+                    allowed_hosts=self.remote_allowed_hosts,
                 ),
                 model_name=normalize_model_name(
                     os.environ.get("MODEL_REMOTE_NAME", self.base_config.model_name)
@@ -81,7 +115,8 @@ class ModelSettingsStore:
             ),
             local=ModelProfile(
                 api_base=normalize_api_base(
-                    os.environ.get("LOCAL_MODEL_API_BASE", DEFAULT_LOCAL_API_BASE)
+                    os.environ.get("LOCAL_MODEL_API_BASE", DEFAULT_LOCAL_API_BASE),
+                    allowed_hosts=self.local_allowed_hosts,
                 ),
                 model_name=normalize_model_name(
                     os.environ.get("LOCAL_MODEL_NAME", DEFAULT_LOCAL_MODEL)
@@ -101,12 +136,19 @@ class ModelSettingsStore:
             return ModelSettings(
                 active_provider=active_provider,
                 remote=ModelProfile(
-                    api_base=normalize_api_base(str(remote.get("api_base") or defaults.remote.api_base)),
+                    api_base=normalize_api_base(
+                        str(remote.get("api_base") or defaults.remote.api_base),
+                        allow_private=False,
+                        allowed_hosts=self.remote_allowed_hosts,
+                    ),
                     model_name=normalize_model_name(str(remote.get("model_name") or defaults.remote.model_name)),
                     api_key=str(remote["api_key"]).strip() if remote.get("api_key") else defaults.remote.api_key,
                 ),
                 local=ModelProfile(
-                    api_base=normalize_api_base(str(local.get("api_base") or defaults.local.api_base)),
+                    api_base=normalize_api_base(
+                        str(local.get("api_base") or defaults.local.api_base),
+                        allowed_hosts=self.local_allowed_hosts,
+                    ),
                     model_name=normalize_model_name(str(local.get("model_name") or defaults.local.model_name)),
                 ),
             )
@@ -161,12 +203,16 @@ class ModelSettingsStore:
             next_settings = ModelSettings(
                 active_provider=active_provider,
                 remote=ModelProfile(
-                    api_base=normalize_api_base(remote_api_base),
+                    api_base=normalize_api_base(
+                        remote_api_base,
+                        allow_private=False,
+                        allowed_hosts=self.remote_allowed_hosts,
+                    ),
                     model_name=normalize_model_name(remote_model_name),
                     api_key=next_key,
                 ),
                 local=ModelProfile(
-                    api_base=normalize_api_base(local_api_base),
+                    api_base=normalize_api_base(local_api_base, allowed_hosts=self.local_allowed_hosts),
                     model_name=normalize_model_name(local_model_name),
                 ),
             )

@@ -72,8 +72,38 @@ public class AgentRun {
 
     private Integer steps;
 
+    @Column(name = "model_provider", length = 20)
+    private String modelProvider;
+
+    @Column(name = "model_name", length = 200)
+    private String modelName;
+
+    @Column(name = "model_request_count", nullable = false)
+    private int modelRequestCount;
+
+    @Column(name = "input_tokens")
+    private Long inputTokens;
+
+    @Column(name = "output_tokens")
+    private Long outputTokens;
+
+    @Column(name = "model_latency_ms", nullable = false)
+    private long modelLatencyMs;
+
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount;
+
     @Column(name = "changed_files_json", nullable = false, columnDefinition = "text")
     private String changedFilesJson;
+
+    @Column(name = "proposed_changes_json", nullable = false, columnDefinition = "text")
+    private String proposedChangesJson;
+
+    @Column(name = "change_status", nullable = false, length = 20)
+    private String changeStatus;
+
+    @Column(name = "changes_applied_at")
+    private Instant changesAppliedAt;
 
     @Column(name = "error_code", length = 80)
     private String errorCode;
@@ -123,6 +153,11 @@ public class AgentRun {
         this.idempotencyKey = idempotencyKey;
         this.traceId = traceId;
         this.changedFilesJson = "[]";
+        this.proposedChangesJson = "[]";
+        this.changeStatus = "NONE";
+        this.modelRequestCount = 0;
+        this.modelLatencyMs = 0;
+        this.attemptCount = 0;
         this.createdAt = Instant.now();
     }
 
@@ -132,9 +167,20 @@ public class AgentRun {
         }
         this.status = RunStatus.RUNNING;
         this.startedAt = Instant.now();
+        this.attemptCount += 1;
     }
 
-    public void markSucceeded(String finalAnswer, int steps, String changedFilesJson) {
+    public void markSucceeded(
+            String finalAnswer,
+            int steps,
+            String changedFilesJson,
+            String proposedChangesJson,
+            String modelProvider,
+            String modelName,
+            int modelRequestCount,
+            Long inputTokens,
+            Long outputTokens,
+            long modelLatencyMs) {
         if (status != RunStatus.RUNNING) {
             return;
         }
@@ -142,6 +188,14 @@ public class AgentRun {
         this.finalAnswer = finalAnswer;
         this.steps = steps;
         this.changedFilesJson = changedFilesJson;
+        this.proposedChangesJson = proposedChangesJson == null ? "[]" : proposedChangesJson;
+        this.changeStatus = "[]".equals(this.proposedChangesJson) ? "NONE" : "PROPOSED";
+        this.modelProvider = modelProvider;
+        this.modelName = modelName;
+        this.modelRequestCount = modelRequestCount;
+        this.inputTokens = inputTokens;
+        this.outputTokens = outputTokens;
+        this.modelLatencyMs = modelLatencyMs;
         this.finishedAt = Instant.now();
     }
 
@@ -223,8 +277,63 @@ public class AgentRun {
         return steps;
     }
 
+    public String getModelProvider() {
+        return modelProvider;
+    }
+
+    public String getModelName() {
+        return modelName;
+    }
+
+    public int getModelRequestCount() {
+        return modelRequestCount;
+    }
+
+    public Long getInputTokens() {
+        return inputTokens;
+    }
+
+    public Long getOutputTokens() {
+        return outputTokens;
+    }
+
+    public long getModelLatencyMs() {
+        return modelLatencyMs;
+    }
+
+    public int getAttemptCount() {
+        return attemptCount;
+    }
+
     public String getChangedFilesJson() {
         return changedFilesJson;
+    }
+
+    public String getProposedChangesJson() {
+        return proposedChangesJson;
+    }
+
+    public String getChangeStatus() {
+        return changeStatus;
+    }
+
+    public Instant getChangesAppliedAt() {
+        return changesAppliedAt;
+    }
+
+    public void markChangesApplied(String changedFilesJson) {
+        if (!"PROPOSED".equals(changeStatus)) {
+            throw new IllegalStateException("Run has no proposed changes");
+        }
+        this.changedFilesJson = changedFilesJson;
+        this.changeStatus = "APPLIED";
+        this.changesAppliedAt = Instant.now();
+    }
+
+    public void rejectChanges() {
+        if ("PROPOSED".equals(changeStatus)) {
+            this.changeStatus = "REJECTED";
+        }
     }
 
     public String getErrorCode() {

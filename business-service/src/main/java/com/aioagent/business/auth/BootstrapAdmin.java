@@ -16,11 +16,17 @@ public class BootstrapAdmin implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(BootstrapAdmin.class);
     private final UserRepository users;
+    private final RefreshTokenRepository refreshTokens;
     private final PasswordEncoder passwordEncoder;
     private final AppProperties properties;
 
-    public BootstrapAdmin(UserRepository users, PasswordEncoder passwordEncoder, AppProperties properties) {
+    public BootstrapAdmin(
+            UserRepository users,
+            RefreshTokenRepository refreshTokens,
+            PasswordEncoder passwordEncoder,
+            AppProperties properties) {
         this.users = users;
+        this.refreshTokens = refreshTokens;
         this.passwordEncoder = passwordEncoder;
         this.properties = properties;
     }
@@ -44,6 +50,7 @@ public class BootstrapAdmin implements ApplicationRunner {
             }
             if (!passwordEncoder.matches(password, existing.getPasswordHash())) {
                 existing.changePasswordHash(passwordEncoder.encode(password));
+                refreshTokens.findAllByUserId(existing.getId()).forEach(RefreshToken::revoke);
                 users.save(existing);
                 log.info("Rotated bootstrap admin password for '{}'", username);
             }

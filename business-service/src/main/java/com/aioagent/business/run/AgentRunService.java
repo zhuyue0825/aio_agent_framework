@@ -12,6 +12,11 @@ import com.aioagent.business.conversation.MessageRepository;
 import com.aioagent.business.conversation.MessageRole;
 import com.aioagent.business.project.Project;
 import com.aioagent.business.project.ProjectService;
+import com.aioagent.business.config.AppProperties;
+import com.aioagent.business.security.RateLimitService;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -21,6 +26,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.PageRequest;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -34,7 +40,11 @@ public class AgentRunService {
     private final ConversationService conversationService;
     private final ProjectService projectService;
     private final RunEventService eventService;
+    private final RunEventRepository runEvents;
+    private final AgentRunMetrics metrics;
     private final ObjectMapper mapper;
+    private final AppProperties properties;
+    private final RateLimitService rateLimits;
 
     public AgentRunService(
             AgentRunRepository runs,
@@ -43,6 +53,10 @@ public class AgentRunService {
             ConversationService conversationService,
             ProjectService projectService,
             RunEventService eventService,
+            RunEventRepository runEvents,
+            AgentRunMetrics metrics,
+            AppProperties properties,
+            RateLimitService rateLimits,
             ObjectMapper mapper) {
         this.runs = runs;
         this.users = users;
@@ -50,6 +64,10 @@ public class AgentRunService {
         this.conversationService = conversationService;
         this.projectService = projectService;
         this.eventService = eventService;
+        this.runEvents = runEvents;
+        this.metrics = metrics;
+        this.properties = properties;
+        this.rateLimits = rateLimits;
         this.mapper = mapper;
     }
 
@@ -69,6 +87,18 @@ public class AgentRunService {
         Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(user.getId(), idempotencyKey);
         if (existing.isPresent()) {
             return new CreateResult(existing.get(), false);
+        }
+        rateLimits.require(
+                "agent-run:" + user.getId(),
+                properties.getSecurity().getRunsPerMinute(),
+                Duration.ofMinutes(1));
+        long dailyLimit = properties.getSecurity().getDailyTokenLimit();
+        if (dailyLimit > 0) {
+            Instant dayStart = Instant.now().truncatedTo(ChronoUnit.DAYS);
+            long used = runs.sumTokensSince(user.getId(), dayStart);
+            if (used >= dailyLimit) {
+                throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "TOKEN_QUOTA_EXCEEDED", "今日模型额度已用完");
+            }
         }
         Conversation conversation = conversationService.require(user, conversationId);
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
@@ -123,6 +153,8 @@ public class AgentRunService {
                 run.getProject() == null ? null : run.getProject().getWorkspaceRoot(),
                 run.getApprovalMode(),
                 8,
+                run.getRequestedBy().getId(),
+                run.getProject() == null ? run.getRequestedBy().getId() : run.getProject().getOwner().getId(),
                 run.getTraceId()));
     }
 
@@ -134,14 +166,38 @@ public class AgentRunService {
         }
         List<String> changedFiles = response.changedFiles() == null ? List.of() : response.changedFiles();
         String changedJson = toJson(changedFiles);
-        run.markSucceeded(response.finalAnswer(), response.steps(), changedJson);
+        List<Map<String, Object>> proposedChanges = response.proposedChanges() == null
+                ? List.of()
+                : response.proposedChanges();
+        run.markSucceeded(
+                response.finalAnswer(),
+                response.steps(),
+                changedJson,
+                toJson(proposedChanges),
+                response.modelProvider(),
+                response.modelName(),
+                response.modelRequestCount(),
+                response.inputTokens(),
+                response.outputTokens(),
+                response.modelLatencyMs());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("steps", response.steps());
         metadata.put("mode", run.getMode().name().toLowerCase());
         metadata.put("changed_files", changedFiles);
+        metadata.put("proposed_change_count", proposedChanges.size());
         metadata.put("run_id", run.getId());
         metadata.put("trace_id", run.getTraceId());
+        metadata.put("model_provider", response.modelProvider());
+        metadata.put("model_name", response.modelName());
+        metadata.put("model_request_count", response.modelRequestCount());
+        if (response.inputTokens() != null) {
+            metadata.put("input_tokens", response.inputTokens());
+        }
+        if (response.outputTokens() != null) {
+            metadata.put("output_tokens", response.outputTokens());
+        }
+        metadata.put("model_latency_ms", response.modelLatencyMs());
         if (run.getProject() != null) {
             metadata.put("project_id", run.getProject().getId());
         }
@@ -154,7 +210,11 @@ public class AgentRunService {
         eventService.append(run, "run.succeeded", Map.of(
                 "status", run.getStatus().name(),
                 "steps", response.steps(),
+                "model_name", response.modelName() == null ? "unknown" : response.modelName(),
+                "model_latency_ms", response.modelLatencyMs(),
+                "proposed_change_count", proposedChanges.size(),
                 "changed_files", changedFiles));
+        metrics.completed(run);
     }
 
     @Transactional
@@ -173,6 +233,7 @@ public class AgentRunService {
         run.getConversation().touch();
         String eventType = status == RunStatus.TIMED_OUT ? "run.timed_out" : "run.failed";
         eventService.append(run, eventType, Map.of("status", status.name(), "error_code", code, "message", safeMessage));
+        metrics.terminal(run);
     }
 
     @Transactional
@@ -181,7 +242,35 @@ public class AgentRunService {
         if (!run.getStatus().isTerminal()) {
             run.cancel();
             eventService.append(run, "run.cancelled", Map.of("status", run.getStatus().name()));
+            metrics.terminal(run);
         }
+        return run;
+    }
+
+    @Transactional
+    public AgentRun applyProposedChanges(UserAccount user, UUID runId, AgentServiceClient agentService) {
+        AgentRun run = require(user, runId);
+        if (run.getProject() == null || !"PROPOSED".equals(run.getChangeStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NO_PROPOSED_CHANGES", "该任务没有待确认修改");
+        }
+        List<Map<String, Object>> proposed = parseProposedChanges(run.getProposedChangesJson());
+        List<String> changedFiles = agentService.applyWorkspaceChanges(
+                run.getProject().getWorkspaceRoot(),
+                proposed,
+                run.getProject().getOwner().getId());
+        run.markChangesApplied(toJson(changedFiles));
+        eventService.append(run, "run.changes.applied", Map.of("changed_files", changedFiles));
+        return run;
+    }
+
+    @Transactional
+    public AgentRun rejectProposedChanges(UserAccount user, UUID runId) {
+        AgentRun run = require(user, runId);
+        if (!"PROPOSED".equals(run.getChangeStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NO_PROPOSED_CHANGES", "该任务没有待确认修改");
+        }
+        run.rejectChanges();
+        eventService.append(run, "run.changes.rejected", Map.of());
         return run;
     }
 
@@ -201,12 +290,25 @@ public class AgentRunService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
     }
 
+    @Transactional(readOnly = true)
+    public List<RunEvent> listEvents(UserAccount user, UUID runId, long afterEventId, int limit) {
+        require(user, runId);
+        return runEvents.findAllByRunIdAndIdGreaterThanOrderByIdAsc(
+                runId,
+                Math.max(0L, afterEventId),
+                PageRequest.of(0, limit));
+    }
+
     private List<AgentServiceClient.HistoryMessage> buildHistory(AgentRun run) {
         if (run.getMaxHistoryMessages() <= 0) {
             return List.of();
         }
         List<AgentServiceClient.HistoryMessage> result = new ArrayList<>();
-        for (Message message : messages.findAllByConversationIdOrderByCreatedAtAscIdAsc(run.getConversation().getId())) {
+        List<Message> recent = new ArrayList<>(messages.findAllByConversationIdOrderByCreatedAtDescIdDesc(
+                run.getConversation().getId(),
+                PageRequest.of(0, Math.min(100, run.getMaxHistoryMessages() + 5))).getContent());
+        java.util.Collections.reverse(recent);
+        for (Message message : recent) {
             if (message.getId().equals(run.getUserMessage().getId()) || message.getRole() == MessageRole.ERROR) {
                 continue;
             }
@@ -226,6 +328,18 @@ public class AgentRunService {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseProposedChanges(String json) {
+        try {
+            return mapper.readValue(json, List.class).stream()
+                    .filter(Map.class::isInstance)
+                    .map(value -> (Map<String, Object>) value)
+                    .toList();
+        } catch (JacksonException exception) {
+            throw new IllegalStateException("Failed to decode proposed changes", exception);
+        }
+    }
+
     public record CreateResult(AgentRun run, boolean created) {
     }
 
@@ -237,6 +351,8 @@ public class AgentRunService {
             String workspaceRoot,
             String approvalMode,
             int maxSteps,
+            UUID requestedById,
+            UUID workspaceOwnerId,
             String traceId) {
     }
 }

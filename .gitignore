@@ -23,6 +23,8 @@ node_modules/
 dist/
 target/
 coverage/
+frontend/test-results/
+frontend/playwright-report/
 
 # Secrets and machine-local configuration
 .env
@@ -38,6 +40,8 @@ traces/
 screenshots/
 deploy/certs/*
 !deploy/certs/README.md
+deploy/alert-webhook-url
+deploy/rclone.conf
 workspaces/*
 !workspaces/.gitkeep
 bundles/*

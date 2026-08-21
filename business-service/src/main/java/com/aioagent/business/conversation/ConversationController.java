@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.data.domain.Page;
+import java.util.LinkedHashMap;
 import tools.jackson.databind.ObjectMapper;
 
 @RestController
@@ -34,14 +37,25 @@ public class ConversationController {
     }
 
     @GetMapping
-    public Map<String, List<ConversationDtos.ConversationResponse>> list(Authentication authentication) {
+    public Map<String, Object> list(
+            @RequestParam(defaultValue = "0") @jakarta.validation.constraints.Min(0) int page,
+            @RequestParam(defaultValue = "50") @jakarta.validation.constraints.Min(1)
+                    @jakarta.validation.constraints.Max(100) int size,
+            Authentication authentication) {
         UserAccount user = currentUser.require(authentication);
-        List<ConversationDtos.ConversationResponse> result = service.listOrCreate(user).stream()
+        Page<Conversation> conversationPage = service.listOrCreate(user, page, size);
+        List<ConversationDtos.ConversationResponse> result = conversationPage.getContent().stream()
                 .map(conversation -> ConversationDtos.ConversationResponse.from(
                         conversation,
                         service.messageCount(conversation.getId())))
                 .toList();
-        return Map.of("conversations", result);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("conversations", result);
+        response.put("page", page);
+        response.put("size", size);
+        response.put("total", conversationPage.getTotalElements());
+        response.put("has_more", conversationPage.hasNext());
+        return response;
     }
 
     @PostMapping
@@ -75,15 +89,23 @@ public class ConversationController {
     }
 
     @GetMapping("/{conversationId}/messages")
-    public Map<String, List<ConversationDtos.MessageResponse>> messages(
+    public Map<String, Object> messages(
             @PathVariable UUID conversationId,
+            @RequestParam(defaultValue = "0") @jakarta.validation.constraints.Min(0) int page,
+            @RequestParam(defaultValue = "100") @jakarta.validation.constraints.Min(1)
+                    @jakarta.validation.constraints.Max(200) int size,
             Authentication authentication) {
-        List<ConversationDtos.MessageResponse> result = service
-                .listMessages(currentUser.require(authentication), conversationId)
-                .stream()
+        Page<Message> messagePage = service.listRecentMessages(
+                currentUser.require(authentication), conversationId, page, size);
+        List<ConversationDtos.MessageResponse> result = new java.util.ArrayList<>(messagePage.getContent().stream()
                 .map(message -> ConversationDtos.MessageResponse.from(message, mapper))
-                .toList();
-        return Map.of("messages", result);
+                .toList());
+        java.util.Collections.reverse(result);
+        return Map.of(
+                "messages", result,
+                "page", page,
+                "size", size,
+                "has_more", messagePage.hasNext());
     }
 
     private ConversationMode parseMode(String rawMode) {

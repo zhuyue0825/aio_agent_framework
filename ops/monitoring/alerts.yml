@@ -1,0 +1,37 @@
+groups:
+  - name: aio-agent
+    rules:
+      - alert: AioAgentBusinessServiceDown
+        expr: up{job="aio-agent-business"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AIO Agent business service is unavailable
+      - alert: AioAgentQueueNearlyFull
+        expr: aio_agent_queue_depth >= 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent executor queue is close to capacity
+      - alert: AioAgentRedisQueueBacklog
+        expr: aio_agent_redis_queue_depth >= 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis Agent run queue has a sustained backlog
+      - alert: AioAgentFailuresIncreasing
+        expr: increase(aio_agent_runs_total{status="failed"}[10m]) >= 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent failures increased during the last ten minutes
+      - alert: AioAgentModelLatencyHigh
+        expr: rate(aio_agent_model_latency_seconds_sum[10m]) / rate(aio_agent_model_latency_seconds_count[10m]) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Average model latency is above thirty seconds

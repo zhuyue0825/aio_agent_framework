@@ -13,7 +13,22 @@ from uuid import uuid4
 SERVICE_NAME = "aio-agent-execution-service"
 SAFE_TRACE_ID = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 TRACE_ID_CONTEXT: ContextVar[str] = ContextVar("trace_id", default="")
-EXTRA_FIELDS = ("http_method", "path", "status", "duration_seconds", "run_id", "event")
+EXTRA_FIELDS = (
+    "http_method",
+    "path",
+    "status",
+    "duration_seconds",
+    "run_id",
+    "event",
+    "error_code",
+    "error_type",
+    "model_provider",
+    "model_name",
+    "model_request_count",
+    "input_tokens",
+    "output_tokens",
+    "model_latency_ms",
+)
 SENSITIVE_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*bearer\s+)[^\s,\"']+"),
