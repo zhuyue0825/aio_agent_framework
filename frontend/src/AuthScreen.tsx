@@ -1,5 +1,5 @@
 import { Bot, KeyRound, UserPlus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type AuthResponse } from "./api";
 
 type AuthScreenProps = {
@@ -8,10 +8,18 @@ type AuthScreenProps = {
 
 export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [registering, setRegistering] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .authConfig()
+      .then((config) => setRegistrationEnabled(config.registration_enabled))
+      .catch(() => setRegistrationEnabled(false));
+  }, []);
 
   async function submit() {
     if (!username.trim() || password.length < 8 || busy) return;
@@ -39,14 +47,16 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <h1>AIO Agent</h1>
           <p>Spring Boot 业务服务 · FastAPI Agent 执行服务</p>
         </div>
-        <div className="auth-tabs">
-          <button className={!registering ? "active" : ""} onClick={() => setRegistering(false)}>
-            <KeyRound size={15} /> 登录
-          </button>
-          <button className={registering ? "active" : ""} onClick={() => setRegistering(true)}>
-            <UserPlus size={15} /> 注册
-          </button>
-        </div>
+        {registrationEnabled ? (
+          <div className="auth-tabs">
+            <button className={!registering ? "active" : ""} onClick={() => setRegistering(false)}>
+              <KeyRound size={15} /> 登录
+            </button>
+            <button className={registering ? "active" : ""} onClick={() => setRegistering(true)}>
+              <UserPlus size={15} /> 注册
+            </button>
+          </div>
+        ) : null}
         <label className="auth-field">
           <span>用户名</span>
           <input
@@ -75,7 +85,9 @@ export default function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         >
           {busy ? "请稍候..." : registering ? "创建账号" : "登录"}
         </button>
-        <p className="auth-note">本地首次启动可使用文档中的 bootstrap admin，也可以直接注册普通用户。</p>
+        <p className="auth-note">
+          {registrationEnabled ? "当前部署允许创建普通用户。" : "公开注册已关闭，请使用部署者配置的管理员账号。"}
+        </p>
       </section>
     </main>
   );

@@ -34,7 +34,7 @@ def settings_payload(**overrides: str) -> dict[str, str]:
         "active_provider": "remote",
         "remote_api_base": "https://api.deepseek.com",
         "remote_model_name": "deepseek-v4-flash",
-        "remote_api_key": "sk-test-secret-never-return",
+        "remote_api_key": "dummy-api-key-never-return",
         "local_api_base": "http://host.docker.internal:8010/v1",
         "local_model_name": "local-deepseek",
     }
@@ -50,11 +50,11 @@ def test_store_persists_secret_without_exposing_it(tmp_path: Path) -> None:
 
     assert public["active_provider"] == "remote"
     assert public["remote"]["api_key_configured"] is True
-    assert "sk-test-secret-never-return" not in json.dumps(public)
+    assert "dummy-api-key-never-return" not in json.dumps(public)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     reloaded = make_store(path)
-    assert reloaded.active_config().model_api_key == "sk-test-secret-never-return"
+    assert reloaded.active_config().model_api_key == "dummy-api-key-never-return"
 
 
 def test_internal_settings_endpoint_switches_to_keyless_local_model(tmp_path: Path) -> None:
@@ -88,4 +88,22 @@ def test_model_connection_test_does_not_return_credentials(tmp_path: Path) -> No
 
     assert response.status_code == 200
     assert response.json()["response"] == "OK"
-    assert "sk-test-secret-never-return" not in response.text
+    assert "dummy-api-key-never-return" not in response.text
+
+
+def test_model_connection_failure_is_sanitized(tmp_path: Path) -> None:
+    store = make_store(tmp_path / "model-settings.json")
+    store.update(**settings_payload())
+
+    with (
+        patch("backend.main.model_settings", store),
+        patch(
+            "backend.main.OpenAICompatibleModel.complete",
+            side_effect=RuntimeError("upstream leaked dummy-api-key-never-return"),
+        ),
+    ):
+        response = client.post("/internal/v1/model-settings/test", headers=AUTH_HEADERS)
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "MODEL_CONNECTION_FAILED"
+    assert "dummy-api-key-never-return" not in response.text

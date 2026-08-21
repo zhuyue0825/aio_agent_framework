@@ -36,6 +36,10 @@ data/*.sqlite3-*
 data/model-settings.json
 traces/
 screenshots/
+deploy/certs/*
+!deploy/certs/README.md
+workspaces/*
+!workspaces/.gitkeep
 bundles/*
 !bundles/aio_agent_training_assets_20260811.tar.chunk-*
 !bundles/aio_agent_training_assets_20260811.SHA256SUMS

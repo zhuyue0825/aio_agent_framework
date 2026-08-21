@@ -215,6 +215,8 @@ http://127.0.0.1:8765
 
 ```bash
 cd /path/to/aio_agent_framework
+cp .env.example .env
+# 填写 .env 中数据库密码、管理员密码、JWT Secret 和内部 Token
 docker compose up -d --build
 ```
 
@@ -245,6 +247,10 @@ http://127.0.0.1:5173
 - FastAPI 只提供带内部令牌的 Agent/工作区接口。
 - 模型 Key 只保存在后端环境变量或本机配置文件中，不进入前端存储，也不会由设置接口回显。
 - 管理员可在页面右上角切换本地模型与远程 API；Key 仅保存在 Git 忽略的后端本机配置文件中，不会由接口回显。
+- 公网部署使用生产 Nginx/HTTPS 入口，仅发布 `443`；详见 `DEPLOYMENT.md`。
+- 公开注册默认关闭，Python 服务以非 root 用户运行且只能访问配置的工作区根目录。
+- 全服务 healthcheck、自动重启和日志轮转，PostgreSQL 定时备份，以及应用服务结构化日志和跨服务 `trace_id`。
+- GitHub Actions 自动检查 Java、Python、前端构建与 Compose 配置。
 
 ## 当前内置工具
 

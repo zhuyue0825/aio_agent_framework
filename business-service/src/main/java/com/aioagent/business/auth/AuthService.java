@@ -1,6 +1,7 @@
 package com.aioagent.business.auth;
 
 import com.aioagent.business.common.ApiException;
+import com.aioagent.business.config.AppProperties;
 import java.util.Locale;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,15 +14,24 @@ public class AuthService {
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final AppProperties properties;
 
-    public AuthService(UserRepository users, PasswordEncoder passwordEncoder, JwtService jwtService) {
+    public AuthService(
+            UserRepository users,
+            PasswordEncoder passwordEncoder,
+            JwtService jwtService,
+            AppProperties properties) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.properties = properties;
     }
 
     @Transactional
     public AuthResult register(String rawUsername, String password) {
+        if (!properties.getSecurity().isPublicRegistrationEnabled()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "REGISTRATION_DISABLED", "公开注册已关闭");
+        }
         String username = normalizeUsername(rawUsername);
         if (users.existsByUsernameIgnoreCase(username)) {
             throw new ApiException(HttpStatus.CONFLICT, "USERNAME_EXISTS", "用户名已存在");

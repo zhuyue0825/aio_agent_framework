@@ -42,13 +42,14 @@ aio_agent_framework/
 
 ## 最快启动
 
-1. 本机体验可以直接启动，无需先创建 `.env`。部署到服务器时，再复制生产配置模板（不要提交真实密钥）：
+1. 首次启动先复制配置模板（不要提交真实密钥）：
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
-服务器部署至少要修改管理员密码、JWT Secret 和内部服务 Token。模型 API Key 可以在管理员登录后的“模型设置”里填写；如果需要用环境变量自动初始化，也仍可设置 `MODEL_API_KEY`。
+必须替换 PostgreSQL 密码、管理员密码、JWT Secret 和内部服务 Token；应用不再提供这些值的开发默认值。JWT Secret 与内部 Token 至少使用 32 个字符，管理员密码至少 12 个字符。模型 API Key 可以在管理员登录后的“模型设置”里填写；如果需要用环境变量自动初始化，也仍可设置 `MODEL_API_KEY`。
 
 2. 启动 PostgreSQL、Sandbox、Python 与 Java：
 
@@ -65,9 +66,11 @@ npm install
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173`。若没有复制 `.env.example`，本地开发默认管理员为 `admin / aio-local-admin`；只用于本机演示。
+打开 `http://127.0.0.1:5173`，使用 `.env` 中配置的 bootstrap admin 登录。公开注册默认关闭；只有显式设置 `AIO_PUBLIC_REGISTRATION_ENABLED=true` 时，登录页和注册接口才允许创建普通用户。
 
 Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`。使用 Compose 时，在“项目工作”里打开这个容器路径；直接在宿主机运行 FastAPI 时，可以打开宿主机路径。
+
+公网生产部署使用独立的 `docker-compose.prod.yml`，仅对外发布 Nginx `443`，完整步骤见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。
 
 ### 在页面里切换模型
 
@@ -102,7 +105,8 @@ Python 环境应在每台电脑上重建，`.venv/` 不上传：
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-dev.txt
-INTERNAL_SERVICE_TOKEN=local-internal-token-change-before-production \
+INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 48)" \
+AIO_ALLOWED_WORKSPACE_ROOTS=/absolute/path/to/allowed/workspaces \
   .venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -112,7 +116,8 @@ INTERNAL_SERVICE_TOKEN=local-internal-token-change-before-production \
 
 公开 API 均由 Spring Boot 提供：
 
-- `POST /api/v1/auth/register`、`POST /api/v1/auth/login`、`GET /api/v1/auth/me`
+- `GET /api/v1/auth/config`、`POST /api/v1/auth/login`、`GET /api/v1/auth/me`
+- `POST /api/v1/auth/register`（仅在部署者显式开启公开注册时可用）
 - `GET|POST /api/v1/conversations`
 - `GET /api/v1/conversations/{id}/messages`
 - `POST /api/v1/conversations/{id}/runs`（要求 `Idempotency-Key`）
@@ -123,6 +128,15 @@ INTERNAL_SERVICE_TOKEN=local-internal-token-change-before-production \
 - `GET /actuator/health`、`/actuator/metrics`、`/actuator/prometheus`
 
 FastAPI 只暴露带 `X-Internal-Token` 的 `/internal/v1/agent/*` 与 `/internal/v1/workspaces/*`，不向前端提供会话 API。
+
+## 运行保障
+
+- 本地与生产 Compose 为所有长期服务配置了 healthcheck 和 `restart: unless-stopped`。
+- `postgres-backup` 启动后立即备份，并按配置周期生成 PostgreSQL custom-format dump；恢复步骤见 `DEPLOYMENT.md`。
+- Nginx、Spring Boot、FastAPI 和备份任务输出结构化日志。请求经 Nginx、Java、Python 传播同一个 `trace_id`，错误响应也会返回该值；Compose 同时限制本地 Docker 日志文件的大小和保留数量。
+- Java 与 Python 的未预期异常只在服务日志保留诊断信息，前端仅显示脱敏错误和 `trace_id`。
+- `.github/workflows/ci.yml` 会执行前端生产构建、Python 契约测试、Java 集成测试和 Compose 配置检查。
+- 当前保持单 Java/单 Python 实例，因此没有加入闲置 Redis；扩容触发条件和任务队列、取消、SSE 广播方案见 `docs/REDIS_SCALING.md`。
 
 ## 异步任务流程
 

@@ -29,7 +29,7 @@ public class AgentRunExecutor {
             return;
         }
         AgentRunService.PreparedExecution prepared = optional.get();
-        MDC.put("traceId", prepared.traceId());
+        MDC.put("trace_id", prepared.traceId());
         try {
             AgentServiceClient.ExecutionRequest request = new AgentServiceClient.ExecutionRequest(
                     prepared.runId(),
@@ -43,7 +43,12 @@ public class AgentRunExecutor {
                     agentService.callbackUrl(runId));
             runs.complete(runId, agentService.execute(request));
         } catch (AgentServiceException exception) {
-            log.warn("Agent run {} failed: {}", runId, exception.getMessage());
+            log.atWarn()
+                    .addKeyValue("run_id", runId)
+                    .addKeyValue("error_type", exception.getCause() == null
+                            ? exception.getClass().getSimpleName()
+                            : exception.getCause().getClass().getSimpleName())
+                    .log("agent_service_run_failed");
             if (exception.isTimeout()) {
                 try {
                     agentService.cancel(runId, prepared.traceId());
@@ -52,13 +57,13 @@ public class AgentRunExecutor {
                 }
                 runs.fail(runId, RunStatus.TIMED_OUT, "AGENT_TIMEOUT", "Agent 执行超时");
             } else {
-                runs.fail(runId, RunStatus.FAILED, "AGENT_SERVICE_ERROR", exception.getMessage());
+                runs.fail(runId, RunStatus.FAILED, "AGENT_SERVICE_ERROR", "Agent 服务暂时不可用，请稍后重试");
             }
         } catch (Exception exception) {
             log.error("Unexpected agent run failure", exception);
-            runs.fail(runId, RunStatus.FAILED, "RUN_EXECUTION_ERROR", exception.getMessage());
+            runs.fail(runId, RunStatus.FAILED, "RUN_EXECUTION_ERROR", "Agent 任务执行失败，请稍后重试");
         } finally {
-            MDC.remove("traceId");
+            MDC.remove("trace_id");
         }
     }
 }
