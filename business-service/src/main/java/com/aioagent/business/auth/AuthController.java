@@ -1,5 +1,6 @@
 package com.aioagent.business.auth;
 
+import com.aioagent.business.config.AppProperties;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -20,10 +21,17 @@ public class AuthController {
 
     private final AuthService authService;
     private final CurrentUser currentUser;
+    private final AppProperties properties;
 
-    public AuthController(AuthService authService, CurrentUser currentUser) {
+    public AuthController(AuthService authService, CurrentUser currentUser, AppProperties properties) {
         this.authService = authService;
         this.currentUser = currentUser;
+        this.properties = properties;
+    }
+
+    @GetMapping("/config")
+    public Map<String, Boolean> config() {
+        return Map.of("registration_enabled", properties.getSecurity().isPublicRegistrationEnabled());
     }
 
     @PostMapping("/register")

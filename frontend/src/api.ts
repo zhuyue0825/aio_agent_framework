@@ -14,6 +14,10 @@ export type AuthResponse = {
   user: User;
 };
 
+export type AuthConfig = {
+  registration_enabled: boolean;
+};
+
 export type Conversation = {
   id: string;
   title: string;
@@ -156,7 +160,7 @@ export class ApiError extends Error {
     public readonly code?: string,
     public readonly traceId?: string,
   ) {
-    super(message);
+    super(traceId ? `${message}（trace_id: ${traceId}）` : message);
   }
 }
 
@@ -222,7 +226,8 @@ async function streamRunEvents(
   });
   if (!response.ok) {
     notifyExpiredSession(response.status);
-    throw new ApiError(`SSE HTTP ${response.status}`, response.status);
+    const traceId = response.headers.get("X-Trace-Id") ?? undefined;
+    throw new ApiError(`SSE HTTP ${response.status}`, response.status, undefined, traceId);
   }
   if (!response.body) throw new Error("浏览器不支持流式任务进度");
 
@@ -264,6 +269,7 @@ async function waitForRun(runId: string, signal?: AbortSignal): Promise<AgentRun
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>("/api/v1/auth/config", undefined, false),
   login: (username: string, password: string) =>
     request<AuthResponse>(
       "/api/v1/auth/login",

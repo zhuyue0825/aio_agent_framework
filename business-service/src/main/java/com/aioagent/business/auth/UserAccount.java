@@ -54,6 +54,10 @@ public class UserAccount {
         return passwordHash;
     }
 
+    public void changePasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
     public UserRole getRole() {
         return role;
     }

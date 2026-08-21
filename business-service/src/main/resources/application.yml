@@ -8,7 +8,7 @@ spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:5432/aio_agent}
     username: ${SPRING_DATASOURCE_USERNAME:aio_agent}
-    password: ${SPRING_DATASOURCE_PASSWORD:aio_agent_local}
+    password: ${SPRING_DATASOURCE_PASSWORD}
   jpa:
     open-in-view: false
     hibernate:
@@ -25,17 +25,18 @@ spring:
 
 app:
   security:
-    jwt-secret: ${AIO_JWT_SECRET:local-development-secret-change-before-production-0123456789}
+    jwt-secret: ${AIO_JWT_SECRET}
     token-ttl: ${AIO_TOKEN_TTL:12h}
+    public-registration-enabled: ${AIO_PUBLIC_REGISTRATION_ENABLED:false}
   agent:
     base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}
     callback-base-url: ${BUSINESS_SERVICE_CALLBACK_BASE_URL:http://127.0.0.1:8081}
-    internal-token: ${INTERNAL_SERVICE_TOKEN:local-internal-token-change-before-production}
+    internal-token: ${INTERNAL_SERVICE_TOKEN}
     connect-timeout: ${AGENT_CONNECT_TIMEOUT:3s}
     read-timeout: ${AGENT_READ_TIMEOUT:3m}
   bootstrap:
     admin-username: ${AIO_BOOTSTRAP_ADMIN_USERNAME:admin}
-    admin-password: ${AIO_BOOTSTRAP_ADMIN_PASSWORD:aio-local-admin}
+    admin-password: ${AIO_BOOTSTRAP_ADMIN_PASSWORD}
   legacy-import:
     enabled: ${AIO_LEGACY_IMPORT_ENABLED:false}
     sqlite-path: ${AIO_LEGACY_SQLITE_PATH:../data/app.sqlite3}
@@ -49,6 +50,8 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+      probes:
+        enabled: true
   info:
     env:
       enabled: true
@@ -59,5 +62,14 @@ info:
     architecture: Spring Boot control plane plus FastAPI execution plane
 
 logging:
-  pattern:
-    level: "%5p [trace_id=%X{traceId:-}]"
+  level:
+    root: ${LOG_LEVEL:INFO}
+  structured:
+    format:
+      console: logstash
+    json:
+      add:
+        service: aio-agent-business-service
+      rename:
+        "[@timestamp]": timestamp
+        logger_name: logger

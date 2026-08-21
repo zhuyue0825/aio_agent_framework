@@ -1,5 +1,6 @@
 package com.aioagent.business.common;
 
+import com.aioagent.business.agent.AgentServiceException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,16 @@ public class GlobalExceptionHandler {
         return response(HttpStatus.FORBIDDEN, "FORBIDDEN", "无访问权限", List.of());
     }
 
+    @ExceptionHandler(AgentServiceException.class)
+    ResponseEntity<Map<String, Object>> handleAgentService(AgentServiceException exception) {
+        log.atWarn()
+                .addKeyValue("error_type", exception.getCause() == null
+                        ? exception.getClass().getSimpleName()
+                        : exception.getCause().getClass().getSimpleName())
+                .log("internal_agent_service_request_failed");
+        return response(HttpStatus.BAD_GATEWAY, "AGENT_SERVICE_UNAVAILABLE", "Agent 服务暂时不可用，请稍后重试", List.of());
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<Map<String, Object>> handleUnexpected(Exception exception) {
         log.error("Unhandled request error", exception);
@@ -64,7 +75,7 @@ public class GlobalExceptionHandler {
         Map<String, Object> error = Map.of(
                 "code", code,
                 "message", message,
-                "trace_id", MDC.get("traceId") == null ? "" : MDC.get("traceId"),
+                "trace_id", MDC.get("trace_id") == null ? "" : MDC.get("trace_id"),
                 "details", details);
         return ResponseEntity.status(status).body(Map.of("error", error));
     }

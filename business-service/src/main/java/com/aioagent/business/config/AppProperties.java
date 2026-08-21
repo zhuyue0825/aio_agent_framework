@@ -28,8 +28,9 @@ public class AppProperties {
     }
 
     public static class Security {
-        private String jwtSecret = "local-development-secret-change-before-production-0123456789";
+        private String jwtSecret;
         private Duration tokenTtl = Duration.ofHours(12);
+        private boolean publicRegistrationEnabled;
 
         public String getJwtSecret() {
             return jwtSecret;
@@ -46,12 +47,20 @@ public class AppProperties {
         public void setTokenTtl(Duration tokenTtl) {
             this.tokenTtl = tokenTtl;
         }
+
+        public boolean isPublicRegistrationEnabled() {
+            return publicRegistrationEnabled;
+        }
+
+        public void setPublicRegistrationEnabled(boolean publicRegistrationEnabled) {
+            this.publicRegistrationEnabled = publicRegistrationEnabled;
+        }
     }
 
     public static class Agent {
         private String baseUrl = "http://127.0.0.1:8000";
         private String callbackBaseUrl = "http://127.0.0.1:8081";
-        private String internalToken = "local-internal-token-change-before-production";
+        private String internalToken;
         private Duration connectTimeout = Duration.ofSeconds(3);
         private Duration readTimeout = Duration.ofMinutes(3);
 
@@ -98,7 +107,7 @@ public class AppProperties {
 
     public static class Bootstrap {
         private String adminUsername = "admin";
-        private String adminPassword = "aio-local-admin";
+        private String adminPassword;
 
         public String getAdminUsername() {
             return adminUsername;

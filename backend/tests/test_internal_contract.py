@@ -76,3 +76,21 @@ def test_workspace_contract_uses_internal_paths(tmp_path: Path) -> None:
     assert saved.status_code == 200
     assert saved.json()["file"]["content"] == "print('after')\n"
     assert (tmp_path / "demo.py").read_text(encoding="utf-8") == "print('after')\n"
+
+
+def test_workspace_rejects_paths_outside_configured_roots(tmp_path: Path, monkeypatch) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("AIO_ALLOWED_WORKSPACE_ROOTS", str(allowed))
+
+    response = client.post(
+        "/internal/v1/workspaces/open",
+        json={"path": str(outside)},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "WORKSPACE_ERROR"
+    assert str(outside) not in response.text

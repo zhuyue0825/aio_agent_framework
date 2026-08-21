@@ -49,6 +49,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
         "app.bootstrap.admin-username=integration-admin",
         "app.bootstrap.admin-password=integration-password",
         "app.security.jwt-secret=integration-test-secret-with-at-least-thirty-two-bytes",
+        "app.security.public-registration-enabled=true",
         "app.agent.internal-token=integration-internal-token",
         "app.legacy-import.enabled=false"
 })
@@ -105,7 +106,9 @@ class BusinessServiceIntegrationTest {
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
         mockMvc.perform(get("/api/v1/conversations"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                .andExpect(jsonPath("$.error.trace_id").isNotEmpty());
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -115,6 +118,24 @@ class BusinessServiceIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access_token").isNotEmpty())
                 .andExpect(jsonPath("$.user.username").value("integration-admin"));
+    }
+
+    @Test
+    void publicRegistrationCanBeDisabled() throws Exception {
+        properties.getSecurity().setPublicRegistrationEnabled(false);
+        try {
+            mockMvc.perform(post("/api/v1/auth/register")
+                            .header("X-Trace-Id", "trace-registration-disabled")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"username":"blocked-user","password":"password-1234"}
+                                    """))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.error.code").value("REGISTRATION_DISABLED"))
+                    .andExpect(jsonPath("$.error.trace_id").value("trace-registration-disabled"));
+        } finally {
+            properties.getSecurity().setPublicRegistrationEnabled(true);
+        }
     }
 
     @Test

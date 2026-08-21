@@ -29,10 +29,47 @@ MAX_TREE_DEPTH = 8
 MAX_FILE_BYTES = 1_500_000
 MAX_SNAPSHOT_FILES = 8000
 VISIBLE_HIDDEN_NAMES = {".codex", ".github", ".openai", ".vscode"}
+ALLOWED_ROOTS_ENV = "AIO_ALLOWED_WORKSPACE_ROOTS"
 
 
 class WorkspaceError(ValueError):
     pass
+
+
+def allowed_workspace_roots() -> tuple[Path, ...]:
+    configured = os.environ.get(ALLOWED_ROOTS_ENV, "")
+    if not configured.strip():
+        raise RuntimeError(f"{ALLOWED_ROOTS_ENV} must contain at least one absolute directory")
+
+    roots: list[Path] = []
+    for value in configured.split(os.pathsep):
+        if not value.strip():
+            continue
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute():
+            raise RuntimeError(f"{ALLOWED_ROOTS_ENV} entries must be absolute paths")
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError(f"Configured workspace root is unavailable: {candidate}") from exc
+        if not resolved.is_dir():
+            raise RuntimeError(f"Configured workspace root is not a directory: {candidate}")
+        roots.append(resolved)
+
+    if not roots:
+        raise RuntimeError(f"{ALLOWED_ROOTS_ENV} must contain at least one absolute directory")
+    return tuple(dict.fromkeys(roots))
+
+
+def workspace_boundary(path: Path) -> Path | None:
+    matches: list[Path] = []
+    for allowed_root in allowed_workspace_roots():
+        try:
+            path.relative_to(allowed_root)
+            matches.append(allowed_root)
+        except ValueError:
+            continue
+    return max(matches, key=lambda item: len(item.parts), default=None)
 
 
 def should_ignore(name: str) -> bool:
@@ -50,13 +87,16 @@ def _failure(message: str, error: str, hint: str | None = None) -> dict[str, Any
 def normalize_workspace_root(path: str) -> Path:
     if not path.strip():
         raise WorkspaceError("文件夹路径不能为空")
-    root = Path(path).expanduser().resolve()
-    if not root.exists():
-        raise WorkspaceError(f"文件夹不存在: {root}")
+    try:
+        root = Path(path).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise WorkspaceError("文件夹不存在或不可访问") from exc
     if not root.is_dir():
-        raise WorkspaceError(f"路径不是文件夹: {root}")
+        raise WorkspaceError("所选路径不是文件夹")
+    if workspace_boundary(root) is None:
+        raise WorkspaceError("该目录不在允许的工作区范围内")
     if not os.access(root, os.R_OK):
-        raise WorkspaceError(f"文件夹不可读: {root}")
+        raise WorkspaceError("文件夹不可读")
     return root
 
 
@@ -80,15 +120,16 @@ def relative_workspace_path(root: Path, path: Path) -> str:
 
 
 def list_directories(path: str | None = None) -> dict[str, Any]:
-    current = Path(path).expanduser().resolve() if path else Path.home().resolve()
-    if not current.exists() or not current.is_dir():
-        raise WorkspaceError(f"目录不存在: {current}")
+    current = normalize_workspace_root(path) if path else allowed_workspace_roots()[0]
+    boundary = workspace_boundary(current)
+    if boundary is None:
+        raise WorkspaceError("该目录不在允许的工作区范围内")
 
     directories: list[dict[str, str]] = []
     try:
         entries = sorted(current.iterdir(), key=lambda item: item.name.casefold())
     except PermissionError as exc:
-        raise WorkspaceError(f"没有权限读取目录: {current}") from exc
+        raise WorkspaceError("没有权限读取该目录") from exc
 
     for entry in entries:
         if entry.name.startswith(".") or entry.is_symlink():
@@ -101,7 +142,7 @@ def list_directories(path: str | None = None) -> dict[str, Any]:
         if len(directories) >= 300:
             break
 
-    parent = None if current.parent == current else str(current.parent)
+    parent = None if current == boundary else str(current.parent)
     return {
         "path": str(current),
         "name": current.name or str(current),
@@ -265,14 +306,18 @@ class WorkspaceTools:
                 if len(entries) >= 300:
                     break
             return _success("目录读取完成", {"path": relative_path, "entries": entries})
-        except (OSError, WorkspaceError) as exc:
+        except WorkspaceError as exc:
             return _failure(str(exc), "list_failed")
+        except OSError:
+            return _failure("目录读取失败", "list_failed")
 
     def read_file(self, relative_path: str) -> dict[str, Any]:
         try:
             return _success("文件读取完成", read_workspace_file(self.root, relative_path))
-        except (OSError, WorkspaceError) as exc:
+        except WorkspaceError as exc:
             return _failure(str(exc), "read_failed")
+        except OSError:
+            return _failure("文件读取失败", "read_failed")
 
     def write_file(self, relative_path: str, content: str) -> dict[str, Any]:
         try:
@@ -284,8 +329,10 @@ class WorkspaceTools:
                     "bytes": len(content.encode("utf-8")),
                 },
             )
-        except (OSError, WorkspaceError) as exc:
+        except WorkspaceError as exc:
             return _failure(str(exc), "write_failed")
+        except OSError:
+            return _failure("文件写入失败", "write_failed")
 
     def search_files(self, query: str) -> dict[str, Any]:
         if not query:
@@ -313,8 +360,8 @@ class WorkspaceTools:
                             if len(matches) >= 100:
                                 return _success("搜索完成，结果已截断", {"matches": matches, "truncated": True})
             return _success("搜索完成", {"matches": matches, "truncated": False})
-        except OSError as exc:
-            return _failure(str(exc), "search_failed")
+        except OSError:
+            return _failure("文件搜索失败", "search_failed")
 
 
 def build_workspace_tools(root: Path) -> ToolRegistry:

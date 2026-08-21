@@ -8,6 +8,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @Order(0)
@@ -25,16 +26,34 @@ public class BootstrapAdmin implements ApplicationRunner {
     }
 
     @Override
+    @Transactional
     public void run(ApplicationArguments args) {
         String username = properties.getBootstrap().getAdminUsername().trim().toLowerCase();
-        if (users.existsByUsernameIgnoreCase(username)) {
+        String password = properties.getBootstrap().getAdminPassword();
+        if (username.isBlank()) {
+            throw new IllegalStateException("AIO_BOOTSTRAP_ADMIN_USERNAME must not be blank");
+        }
+        if (password == null || password.length() < 12) {
+            throw new IllegalStateException("AIO_BOOTSTRAP_ADMIN_PASSWORD must contain at least 12 characters");
+        }
+
+        UserAccount existing = users.findByUsernameIgnoreCase(username).orElse(null);
+        if (existing != null) {
+            if (existing.getRole() != UserRole.ADMIN) {
+                throw new IllegalStateException("Bootstrap administrator username belongs to a non-admin user");
+            }
+            if (!passwordEncoder.matches(password, existing.getPasswordHash())) {
+                existing.changePasswordHash(passwordEncoder.encode(password));
+                users.save(existing);
+                log.info("Rotated bootstrap admin password for '{}'", username);
+            }
             return;
         }
         UserAccount admin = new UserAccount(
                 username,
-                passwordEncoder.encode(properties.getBootstrap().getAdminPassword()),
+                passwordEncoder.encode(password),
                 UserRole.ADMIN);
         users.save(admin);
-        log.warn("Created bootstrap admin '{}'; replace the development password before deployment", username);
+        log.info("Created bootstrap admin '{}'", username);
     }
 }

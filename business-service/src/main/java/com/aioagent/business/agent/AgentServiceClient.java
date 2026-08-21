@@ -1,5 +1,6 @@
 package com.aioagent.business.agent;
 
+import com.aioagent.business.common.TraceIdFilter;
 import com.aioagent.business.config.AppProperties;
 import com.aioagent.business.conversation.ConversationMode;
 import java.net.http.HttpClient;
@@ -7,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.MDC;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -38,6 +40,13 @@ public class AgentServiceClient {
                 .baseUrl(properties.getAgent().getBaseUrl())
                 .requestFactory(requestFactory)
                 .defaultHeader(INTERNAL_TOKEN_HEADER, properties.getAgent().getInternalToken())
+                .requestInterceptor((request, body, execution) -> {
+                    String traceId = MDC.get("trace_id");
+                    if (traceId != null && !traceId.isBlank()) {
+                        request.getHeaders().set(TraceIdFilter.HEADER, traceId);
+                    }
+                    return execution.execute(request, body);
+                })
                 .build();
     }
 
@@ -177,7 +186,7 @@ public class AgentServiceClient {
         boolean timeout = exception instanceof ResourceAccessException
                 && exception.getMessage() != null
                 && exception.getMessage().toLowerCase().contains("timed out");
-        return new AgentServiceException(message + ": " + exception.getMessage(), exception, timeout);
+        return new AgentServiceException(message, exception, timeout);
     }
 
     public String callbackUrl(UUID runId) {
