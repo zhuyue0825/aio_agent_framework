@@ -170,7 +170,13 @@ def test_project_run_passes_trimmed_history_and_task_to_runtime(tmp_path: Path) 
         model_latency_ms=5,
     )
 
-    with patch("backend.main.AgentRuntime.run", return_value=runtime_result) as run:
+    with (
+        patch(
+            "backend.main.model_settings.active_config",
+            return_value=AgentConfig(model_api_key="test-key"),
+        ),
+        patch("backend.main.AgentRuntime.run", return_value=runtime_result) as run,
+    ):
         result = run_project_agent(
             request,
             "trace-project",
