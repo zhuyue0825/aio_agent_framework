@@ -65,3 +65,5 @@ runs/
 
 # MiniMind is maintained as a separate nested repository.
 minimind/
+!ops/minimind/
+!ops/minimind/**

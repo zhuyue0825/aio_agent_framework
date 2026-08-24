@@ -89,6 +89,41 @@ services:
       timeout: 5s
       retries: 8
 
+  minimind:
+    build:
+      context: ./ops/minimind
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      OMP_NUM_THREADS: ${MINIMIND_CPU_THREADS:-4}
+    command: ["python", "serve_openai_api.py", "--weight", "full_sft", "--device", "cpu"]
+    ports:
+      - "127.0.0.1:8998:8998"
+    volumes:
+      - ${MINIMIND_WEIGHTS_HOST_PATH:-./minimind/out}:/opt/minimind/out:ro
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10002,gid=10002,mode=1770
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:8998/docs', timeout=3);
+          raise SystemExit(0 if response.status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 3m
+    stop_grace_period: 20s
+
   agent-service:
     build:
       context: .
@@ -103,8 +138,8 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-deepseek-v4-flash}
       MODEL_REMOTE_ALLOWED_HOSTS: ${MODEL_REMOTE_ALLOWED_HOSTS:-api.deepseek.com}
-      MODEL_LOCAL_ALLOWED_HOSTS: ${MODEL_LOCAL_ALLOWED_HOSTS:-host.docker.internal,localhost,127.0.0.1}
-      LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://host.docker.internal:8998/v1}
+      MODEL_LOCAL_ALLOWED_HOSTS: ${MODEL_LOCAL_ALLOWED_HOSTS:-minimind,host.docker.internal,localhost,127.0.0.1}
+      LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://minimind:8998/v1}
       LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-minimind}
       MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-120}
       MODEL_MAX_RETRIES: ${MODEL_MAX_RETRIES:-3}

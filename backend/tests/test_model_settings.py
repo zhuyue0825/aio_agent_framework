@@ -38,7 +38,7 @@ def settings_payload(**overrides: str) -> dict[str, str]:
         "remote_api_base": "https://api.deepseek.com",
         "remote_model_name": "deepseek-v4-flash",
         "remote_api_key": "dummy-api-key-never-return",
-        "local_api_base": "http://host.docker.internal:8998/v1",
+        "local_api_base": "http://minimind:8998/v1",
         "local_model_name": "minimind",
     }
     payload.update(overrides)
@@ -50,7 +50,7 @@ def test_default_local_profile_points_to_minimind(tmp_path: Path) -> None:
         public = make_store(tmp_path / "model-settings.json").public_view()
 
     assert public["local"] == {
-        "api_base": "http://host.docker.internal:8998/v1",
+        "api_base": "http://minimind:8998/v1",
         "model_name": "minimind",
     }
 

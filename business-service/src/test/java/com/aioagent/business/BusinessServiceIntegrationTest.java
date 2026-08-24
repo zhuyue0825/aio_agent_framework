@@ -382,7 +382,7 @@ class BusinessServiceIntegrationTest {
                         "model_name", "deepseek-v4-flash",
                         "api_key_configured", true),
                 "local", Map.of(
-                        "api_base", "http://host.docker.internal:8998/v1",
+                        "api_base", "http://minimind:8998/v1",
                         "model_name", "minimind")));
 
         mockMvc.perform(get("/api/v1/model-settings")

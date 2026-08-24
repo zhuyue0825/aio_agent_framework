@@ -19,7 +19,7 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }: ModelSet
   const [remoteApiBase, setRemoteApiBase] = useState("https://api.deepseek.com");
   const [remoteModelName, setRemoteModelName] = useState("deepseek-v4-flash");
   const [remoteApiKey, setRemoteApiKey] = useState("");
-  const [localApiBase, setLocalApiBase] = useState("http://host.docker.internal:8998/v1");
+  const [localApiBase, setLocalApiBase] = useState("http://minimind:8998/v1");
   const [localModelName, setLocalModelName] = useState("minimind");
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(false);
