@@ -125,10 +125,22 @@ public class RedisAgentRunDispatcher implements AgentRunDispatcher, SmartLifecyc
                     "0".getBytes(StandardCharsets.UTF_8),
                     "MKSTREAM".getBytes(StandardCharsets.UTF_8)));
         } catch (DataAccessException exception) {
-            if (exception.getMessage() == null || !exception.getMessage().contains("BUSYGROUP")) {
+            if (!isGroupAlreadyExists(exception)) {
                 throw exception;
             }
         }
+    }
+
+    private boolean isGroupAlreadyExists(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.contains("BUSYGROUP")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private double queueDepth() {

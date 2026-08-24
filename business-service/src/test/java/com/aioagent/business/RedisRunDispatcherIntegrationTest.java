@@ -28,7 +28,7 @@ class RedisRunDispatcherIntegrationTest {
             .withExposedPorts(6379);
 
     @Test
-    void streamConsumerRunsAndAcknowledgesDispatchedJob() {
+    void streamConsumerRunsAndCanRestartWithExistingGroup() {
         LettuceConnectionFactory connectionFactory = new LettuceConnectionFactory(
                 REDIS.getHost(), REDIS.getMappedPort(6379));
         connectionFactory.afterPropertiesSet();
@@ -54,6 +54,13 @@ class RedisRunDispatcherIntegrationTest {
                 taskExecutor,
                 properties,
                 new SimpleMeterRegistry());
+        RedisAgentRunDispatcher restartedDispatcher = new RedisAgentRunDispatcher(
+                template,
+                connectionFactory,
+                runner,
+                taskExecutor,
+                properties,
+                new SimpleMeterRegistry());
         try {
             dispatcher.start();
             UUID runId = UUID.randomUUID();
@@ -65,7 +72,14 @@ class RedisRunDispatcherIntegrationTest {
                     "1",
                     template.opsForValue().get(
                             properties.getRedis().getKeyPrefix() + ":run-cancelled:" + cancelledRunId));
+
+            dispatcher.stop();
+            restartedDispatcher.start();
+            UUID restartedRunId = UUID.randomUUID();
+            restartedDispatcher.dispatch(restartedRunId);
+            verify(runner, timeout(5_000)).execute(restartedRunId);
         } finally {
+            restartedDispatcher.stop();
             dispatcher.stop();
             taskExecutor.shutdown();
             connectionFactory.destroy();
