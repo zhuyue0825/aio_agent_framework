@@ -77,20 +77,20 @@ Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`�
 使用管理员账号登录后，点击右上角当前模型即可打开“模型设置”：
 
 - `远程 API`：填写白名单内的 DeepSeek 或其他 OpenAI Chat Completions 兼容接口、模型名和 API Key。
-- `本地模型`：填写白名单内的本机 OpenAI 兼容地址，Compose 默认使用 `http://host.docker.internal:8010/v1`。
+- `本地模型`：使用仓库内置 MiniMind，Compose 默认连接 `http://host.docker.internal:8998/v1`，模型名为 `minimind`。
 - “保存并应用”会让下一次对话使用新模型；“保存并测试”会额外发起一次最小模型请求。
 
 API Key 只由浏览器发送给 Spring Boot，再通过内部令牌转发给 FastAPI。FastAPI 将它写入 Git 忽略的 `data/model-settings.json`，文件权限为 `600`；读取设置时只返回 `api_key_configured`，不会把 Key 回传到浏览器。
 
 公网部署应分别通过 `MODEL_REMOTE_ALLOWED_HOSTS` 和 `MODEL_LOCAL_ALLOWED_HOSTS` 固定可访问域名。不要为了临时调试把白名单改成任意地址。
 
-启动仓库内置的本地 DeepSeek 兼容服务：
+启动仓库内置的 MiniMind OpenAI 兼容服务：
 
 ```bash
-./scripts/run_local_deepseek_api.sh
+./scripts/run_minimind_api.sh
 ```
 
-它在宿主机 `8010` 端口提供接口。当前 Compose 中的 Agent 容器通过 `host.docker.internal` 访问该服务；仅在可信网络中运行这个无鉴权的本地端口。
+它会加载 `minimind/out/full_sft_768.pth`，并在宿主机 `8998` 端口提供接口。当前 Compose 中的 Agent 容器通过 `host.docker.internal` 访问该服务；仅在可信网络中运行这个无鉴权的本地端口。
 
 ## 本地开发
 

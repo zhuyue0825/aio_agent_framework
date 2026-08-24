@@ -382,8 +382,8 @@ class BusinessServiceIntegrationTest {
                         "model_name", "deepseek-v4-flash",
                         "api_key_configured", true),
                 "local", Map.of(
-                        "api_base", "http://host.docker.internal:8010/v1",
-                        "model_name", "local-deepseek")));
+                        "api_base", "http://host.docker.internal:8998/v1",
+                        "model_name", "minimind")));
 
         mockMvc.perform(get("/api/v1/model-settings")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_USER"))))

@@ -19,8 +19,8 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }: ModelSet
   const [remoteApiBase, setRemoteApiBase] = useState("https://api.deepseek.com");
   const [remoteModelName, setRemoteModelName] = useState("deepseek-v4-flash");
   const [remoteApiKey, setRemoteApiKey] = useState("");
-  const [localApiBase, setLocalApiBase] = useState("http://host.docker.internal:8010/v1");
-  const [localModelName, setLocalModelName] = useState("local-deepseek-r1-distill-qwen-1.5b");
+  const [localApiBase, setLocalApiBase] = useState("http://host.docker.internal:8998/v1");
+  const [localModelName, setLocalModelName] = useState("minimind");
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -125,7 +125,7 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }: ModelSet
                 <Cpu size={19} />
                 <span>
                   <strong>本地模型</strong>
-                  <small>连接电脑上的模型服务</small>
+                  <small>仓库内置 MiniMind 服务</small>
                 </span>
               </button>
             </div>

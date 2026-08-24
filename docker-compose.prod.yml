@@ -96,8 +96,8 @@ services:
       MODEL_API_BASE: ${MODEL_API_BASE:-https://api.deepseek.com}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-deepseek-v4-flash}
-      LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://host.docker.internal:8010/v1}
-      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-local-deepseek-r1-distill-qwen-1.5b}
+      LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://host.docker.internal:8998/v1}
+      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-minimind}
       MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-120}
       MODEL_MAX_RETRIES: ${MODEL_MAX_RETRIES:-3}
       MODEL_SETTINGS_PATH: /app/data/model-settings.json

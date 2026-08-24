@@ -16,8 +16,8 @@ ModelProvider = Literal["local", "remote"]
 
 DEFAULT_REMOTE_API_BASE = "https://api.deepseek.com"
 DEFAULT_REMOTE_MODEL = "deepseek-v4-flash"
-DEFAULT_LOCAL_API_BASE = "http://host.docker.internal:8010/v1"
-DEFAULT_LOCAL_MODEL = "local-deepseek-r1-distill-qwen-1.5b"
+DEFAULT_LOCAL_API_BASE = "http://host.docker.internal:8998/v1"
+DEFAULT_LOCAL_MODEL = "minimind"
 
 
 def normalize_api_base(

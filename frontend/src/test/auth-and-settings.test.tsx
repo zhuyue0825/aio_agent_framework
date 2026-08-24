@@ -15,8 +15,8 @@ const settings: ModelSettings = {
     api_key_configured: true,
   },
   local: {
-    api_base: "http://127.0.0.1:8010/v1",
-    model_name: "local-model",
+    api_base: "http://127.0.0.1:8998/v1",
+    model_name: "minimind",
   },
 };
 
@@ -48,7 +48,7 @@ describe("authentication and model settings", () => {
     const update = vi.spyOn(api, "updateModelSettings").mockResolvedValue({
       ...settings,
       active_provider: "local",
-      active_model_name: "local-model",
+      active_model_name: "minimind",
     });
 
     render(<ModelSettingsDialog open onClose={() => undefined} onSaved={() => undefined} />);
