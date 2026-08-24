@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.data.domain.PageRequest;
 import tools.jackson.databind.ObjectMapper;
 
 @Component
@@ -15,7 +17,7 @@ public class SseRunEventHub {
     private static final long EMITTER_TIMEOUT_MILLIS = 30L * 60L * 1000L;
     private final RunEventRepository events;
     private final ObjectMapper mapper;
-    private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<Subscriber>> emitters = new ConcurrentHashMap<>();
 
     public SseRunEventHub(RunEventRepository events, ObjectMapper mapper) {
         this.events = events;
@@ -23,23 +25,31 @@ public class SseRunEventHub {
     }
 
     public SseEmitter subscribe(AgentRun run) {
+        return subscribe(run, 0L);
+    }
+
+    public SseEmitter subscribe(AgentRun run, long afterEventId) {
         UUID runId = run.getId();
         SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MILLIS);
-        emitters.computeIfAbsent(runId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
-        emitter.onCompletion(() -> remove(runId, emitter));
-        emitter.onTimeout(() -> remove(runId, emitter));
-        emitter.onError(error -> remove(runId, emitter));
+        Subscriber subscriber = new Subscriber(emitter);
+        emitters.computeIfAbsent(runId, ignored -> new CopyOnWriteArrayList<>()).add(subscriber);
+        emitter.onCompletion(() -> remove(runId, subscriber));
+        emitter.onTimeout(() -> remove(runId, subscriber));
+        emitter.onError(error -> remove(runId, subscriber));
 
-        List<RunEvent> history = events.findAllByRunIdOrderByIdAsc(runId);
+        List<RunEvent> history = events.findAllByRunIdAndIdGreaterThanOrderByIdAsc(
+                runId,
+                Math.max(0L, afterEventId),
+                PageRequest.of(0, 500));
         try {
             for (RunEvent event : history) {
-                send(emitter, event);
+                send(subscriber, event);
             }
             if (run.getStatus().isTerminal()) {
                 emitter.complete();
             }
         } catch (IOException exception) {
-            remove(runId, emitter);
+            remove(runId, subscriber);
             emitter.completeWithError(exception);
         }
         return emitter;
@@ -47,16 +57,16 @@ public class SseRunEventHub {
 
     public void publish(RunEvent event) {
         UUID runId = event.getRun().getId();
-        List<SseEmitter> current = emitters.getOrDefault(runId, new CopyOnWriteArrayList<>());
-        for (SseEmitter emitter : current) {
+        List<Subscriber> current = emitters.getOrDefault(runId, new CopyOnWriteArrayList<>());
+        for (Subscriber subscriber : current) {
             try {
-                send(emitter, event);
+                send(subscriber, event);
                 if (isTerminal(event.getEventType())) {
-                    emitter.complete();
+                    subscriber.emitter().complete();
                 }
             } catch (IOException exception) {
-                remove(runId, emitter);
-                emitter.completeWithError(exception);
+                remove(runId, subscriber);
+                subscriber.emitter().completeWithError(exception);
             }
         }
         if (isTerminal(event.getEventType())) {
@@ -64,11 +74,16 @@ public class SseRunEventHub {
         }
     }
 
-    private void send(SseEmitter emitter, RunEvent event) throws IOException {
-        emitter.send(SseEmitter.event()
-                .id(String.valueOf(event.getId()))
-                .name(event.getEventType())
-                .data(RunDtos.RunEventResponse.from(event, mapper)));
+    private void send(Subscriber subscriber, RunEvent event) throws IOException {
+        synchronized (subscriber) {
+            if (!subscriber.deliveredEventIds().add(event.getId())) {
+                return;
+            }
+            subscriber.emitter().send(SseEmitter.event()
+                    .id(String.valueOf(event.getId()))
+                    .name(event.getEventType())
+                    .data(RunDtos.RunEventResponse.from(event, mapper)));
+        }
     }
 
     private boolean isTerminal(String type) {
@@ -78,14 +93,20 @@ public class SseRunEventHub {
                 || type.equals("run.timed_out");
     }
 
-    private void remove(UUID runId, SseEmitter emitter) {
-        CopyOnWriteArrayList<SseEmitter> current = emitters.get(runId);
+    private void remove(UUID runId, Subscriber subscriber) {
+        CopyOnWriteArrayList<Subscriber> current = emitters.get(runId);
         if (current == null) {
             return;
         }
-        current.remove(emitter);
+        current.remove(subscriber);
         if (current.isEmpty()) {
             emitters.remove(runId, current);
+        }
+    }
+
+    private record Subscriber(SseEmitter emitter, Set<Long> deliveredEventIds) {
+        private Subscriber(SseEmitter emitter) {
+            this(emitter, ConcurrentHashMap.newKeySet());
         }
     }
 }

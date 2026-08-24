@@ -5,6 +5,21 @@ x-default-logging: &default-logging
     max-file: "${DOCKER_LOG_MAX_FILES:-5}"
 
 services:
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - aio-agent-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -83,12 +98,24 @@ services:
       MODEL_NAME: ${MODEL_NAME:-deepseek-v4-flash}
       LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://host.docker.internal:8010/v1}
       LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-local-deepseek-r1-distill-qwen-1.5b}
+      MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-120}
+      MODEL_MAX_RETRIES: ${MODEL_MAX_RETRIES:-3}
       MODEL_SETTINGS_PATH: /app/data/model-settings.json
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN in .env}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      AIO_REDIS_KEY_PREFIX: ${AIO_REDIS_KEY_PREFIX:-aio}
+      AIO_MULTI_TENANT_WORKSPACES: "true"
+      MODEL_REMOTE_ALLOWED_HOSTS: ${MODEL_REMOTE_ALLOWED_HOSTS:-api.deepseek.com}
+      MODEL_LOCAL_ALLOWED_HOSTS: ${MODEL_LOCAL_ALLOWED_HOSTS:-host.docker.internal,localhost,127.0.0.1}
+      AIO_ENABLE_LOCAL_TEST_TOOL: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       aio-sandbox:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -134,12 +161,25 @@ services:
       AIO_BOOTSTRAP_ADMIN_USERNAME: ${AIO_BOOTSTRAP_ADMIN_USERNAME:-admin}
       AIO_BOOTSTRAP_ADMIN_PASSWORD: ${AIO_BOOTSTRAP_ADMIN_PASSWORD:?Set AIO_BOOTSTRAP_ADMIN_PASSWORD in .env}
       AIO_PUBLIC_REGISTRATION_ENABLED: ${AIO_PUBLIC_REGISTRATION_ENABLED:-false}
+      AIO_REFRESH_COOKIE_SECURE: "true"
+      AIO_TOKEN_TTL: ${AIO_TOKEN_TTL:-15m}
+      AIO_REFRESH_TOKEN_TTL: ${AIO_REFRESH_TOKEN_TTL:-30d}
+      AIO_LOGIN_ATTEMPTS_PER_MINUTE: ${AIO_LOGIN_ATTEMPTS_PER_MINUTE:-10}
+      AIO_RUNS_PER_MINUTE: ${AIO_RUNS_PER_MINUTE:-20}
+      AIO_DAILY_TOKEN_LIMIT: ${AIO_DAILY_TOKEN_LIMIT:-200000}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      AIO_REDIS_ENABLED: "true"
+      AIO_REDIS_KEY_PREFIX: ${AIO_REDIS_KEY_PREFIX:-aio}
       AIO_LEGACY_IMPORT_ENABLED: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
       agent-service:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     expose:
       - "8081"
@@ -181,8 +221,64 @@ services:
       retries: 12
       start_period: 10s
 
+  backup-offsite:
+    image: rclone/rclone:1.70
+    profiles: [offsite-backup]
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        while true; do
+          rclone sync /backups "$${POSTGRES_BACKUP_REMOTE:?POSTGRES_BACKUP_REMOTE is required}" --checksum;
+          sleep "$${POSTGRES_BACKUP_OFFSITE_INTERVAL_SECONDS:-3600}";
+        done
+    environment:
+      POSTGRES_BACKUP_REMOTE: ${POSTGRES_BACKUP_REMOTE:-}
+      POSTGRES_BACKUP_OFFSITE_INTERVAL_SECONDS: ${POSTGRES_BACKUP_OFFSITE_INTERVAL_SECONDS:-3600}
+    volumes:
+      - aio-agent-postgres-backups:/backups:ro
+      - ${RCLONE_CONFIG_PATH:-./deploy/rclone.conf}:/config/rclone/rclone.conf:ro
+    depends_on:
+      postgres-backup:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./ops/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - aio-agent-prometheus-data:/prometheus
+    depends_on:
+      business-service:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.1
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./ops/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${ALERT_WEBHOOK_URL_FILE:-./deploy/alert-webhook-url}:/run/secrets/alert-webhook-url:ro
+      - aio-agent-alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+
 volumes:
   aio-agent-postgres-data:
   aio-agent-postgres-backups:
   aio-agent-runtime-data:
   aio-agent-traces:
+  aio-agent-redis-data:
+  aio-agent-prometheus-data:
+  aio-agent-alertmanager-data:

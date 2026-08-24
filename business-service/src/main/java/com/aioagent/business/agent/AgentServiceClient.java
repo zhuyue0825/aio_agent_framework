@@ -17,6 +17,8 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
 
 @Component
 public class AgentServiceClient {
@@ -27,9 +29,11 @@ public class AgentServiceClient {
 
     private final RestClient client;
     private final AppProperties properties;
+    private final ObjectMapper mapper;
 
-    public AgentServiceClient(AppProperties properties, RestClient.Builder clientBuilder) {
+    public AgentServiceClient(AppProperties properties, RestClient.Builder clientBuilder, ObjectMapper mapper) {
         this.properties = properties;
+        this.mapper = mapper;
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(properties.getAgent().getConnectTimeout())
@@ -125,27 +129,45 @@ public class AgentServiceClient {
         }
     }
 
-    public Map<String, Object> listDirectories(String path) {
-        return getMap("/internal/v1/workspaces/directories", Optional.ofNullable(path), null, null);
+    public Map<String, Object> listDirectories(String path, UUID ownerId) {
+        return getMap("/internal/v1/workspaces/directories", Optional.ofNullable(path), null, null, ownerId);
     }
 
-    public Map<String, Object> openWorkspace(String path) {
-        return postMap("/internal/v1/workspaces/open", Map.of("path", path));
+    public Map<String, Object> openWorkspace(String path, UUID ownerId) {
+        return postMap("/internal/v1/workspaces/open", Map.of("path", path, "owner_id", ownerId));
     }
 
-    public Map<String, Object> workspaceTree(String root) {
-        return getMap("/internal/v1/workspaces/tree", Optional.of(root), null, null);
+    public Map<String, Object> workspaceTree(String root, UUID ownerId) {
+        return getMap("/internal/v1/workspaces/tree", Optional.of(root), null, null, ownerId);
     }
 
-    public Map<String, Object> workspaceFile(String root, String relativePath) {
-        return getMap("/internal/v1/workspaces/file", Optional.empty(), root, relativePath);
+    public Map<String, Object> workspaceFile(String root, String relativePath, UUID ownerId) {
+        return getMap("/internal/v1/workspaces/file", Optional.empty(), root, relativePath, ownerId);
     }
 
-    public Map<String, Object> saveWorkspaceFile(String root, String relativePath, String content) {
-        return putMap("/internal/v1/workspaces/file", Map.of("root", root, "path", relativePath, "content", content));
+    public Map<String, Object> saveWorkspaceFile(String root, String relativePath, String content, UUID ownerId) {
+        return putMap(
+                "/internal/v1/workspaces/file",
+                Map.of("root", root, "path", relativePath, "content", content, "owner_id", ownerId));
     }
 
-    private Map<String, Object> getMap(String endpoint, Optional<String> path, String root, String relativePath) {
+    public List<String> applyWorkspaceChanges(String root, List<Map<String, Object>> changes, UUID ownerId) {
+        Map<String, Object> response = postMap(
+                "/internal/v1/workspaces/changes/apply",
+                Map.of("root", root, "changes", changes, "owner_id", ownerId));
+        Object raw = response.get("changed_files");
+        if (!(raw instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream().filter(String.class::isInstance).map(String.class::cast).toList();
+    }
+
+    private Map<String, Object> getMap(
+            String endpoint,
+            Optional<String> path,
+            String root,
+            String relativePath,
+            UUID ownerId) {
         try {
             return client.get()
                     .uri(builder -> {
@@ -156,6 +178,9 @@ public class AgentServiceClient {
                         }
                         if (relativePath != null) {
                             builder.queryParam("path", relativePath);
+                        }
+                        if (ownerId != null) {
+                            builder.queryParam("owner_id", ownerId);
                         }
                         return builder.build();
                     })
@@ -186,7 +211,29 @@ public class AgentServiceClient {
         boolean timeout = exception instanceof ResourceAccessException
                 && exception.getMessage() != null
                 && exception.getMessage().toLowerCase().contains("timed out");
-        return new AgentServiceException(message, exception, timeout);
+        return new AgentServiceException(message, exception, timeout, upstreamErrorCode(exception));
+    }
+
+    @SuppressWarnings("unchecked")
+    private String upstreamErrorCode(RestClientException exception) {
+        if (!(exception instanceof RestClientResponseException response)) {
+            return "AGENT_SERVICE_UNAVAILABLE";
+        }
+        try {
+            Object decoded = mapper.readValue(response.getResponseBodyAsString(), Object.class);
+            if (decoded instanceof Map<?, ?> body) {
+                Object rawDetail = body.get("detail");
+                if (rawDetail == null) {
+                    rawDetail = body.get("error");
+                }
+                if (rawDetail instanceof Map<?, ?> detail && detail.get("code") instanceof String code) {
+                    return code.substring(0, Math.min(code.length(), 80));
+                }
+            }
+        } catch (JacksonException ignored) {
+            // Fall through to a stable generic code without exposing the upstream body.
+        }
+        return "AGENT_SERVICE_ERROR";
     }
 
     public String callbackUrl(UUID runId) {
@@ -216,9 +263,29 @@ public class AgentServiceClient {
             String approvalMode,
             int maxSteps,
             String traceId,
+            UUID requestedById,
+            UUID workspaceOwnerId,
             String callbackUrl) {
+        public ExecutionRequest {
+            history = history == null ? List.of() : history;
+        }
     }
 
-    public record ExecutionResponse(String finalAnswer, int steps, List<String> changedFiles, String traceId) {
+    public record ExecutionResponse(
+            String finalAnswer,
+            int steps,
+            List<String> changedFiles,
+            List<Map<String, Object>> proposedChanges,
+            String traceId,
+            String modelProvider,
+            String modelName,
+            int modelRequestCount,
+            Long inputTokens,
+            Long outputTokens,
+            long modelLatencyMs) {
+        public ExecutionResponse {
+            changedFiles = changedFiles == null ? List.of() : changedFiles;
+            proposedChanges = proposedChanges == null ? List.of() : proposedChanges;
+        }
     }
 }

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from secrets import compare_digest
-from threading import RLock
+from threading import Event, RLock
 from time import monotonic
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Callable, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -16,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agent_framework.http_json import post_json
-from agent_framework.model import OpenAICompatibleModel
+from agent_framework.model import ModelApiError, ModelCancelledError, OpenAICompatibleModel
 from agent_framework.runtime import AgentRunCancelled
 from agent_framework.trace import TraceLogger
 
@@ -29,15 +30,15 @@ from .logging_config import (
     normalize_trace_id,
 )
 from .model_settings import ModelSettingsStore
+from .redis_cancellation import RedisCancellationBridge
 from .workspace import (
     WorkspaceError,
+    apply_workspace_changes,
     build_workspace_tools,
     build_workspace_tree,
-    changed_workspace_files,
     list_directories,
     normalize_workspace_root,
     read_workspace_file,
-    snapshot_workspace,
     write_workspace_file,
 )
 
@@ -59,6 +60,15 @@ def required_internal_token() -> str:
 INTERNAL_SERVICE_TOKEN = required_internal_token()
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    redis_cancellations.start()
+    try:
+        yield
+    finally:
+        redis_cancellations.stop()
+
+
 def require_internal_token(
     supplied: Annotated[str | None, Header(alias="X-Internal-Token")] = None,
 ) -> None:
@@ -70,6 +80,7 @@ app = FastAPI(
     title="AIO Agent Execution Service",
     version="0.2.0",
     dependencies=[Depends(require_internal_token)],
+    lifespan=lifespan,
 )
 
 
@@ -167,18 +178,35 @@ class AgentRunRequest(BaseModel):
     workspace_root: str | None = None
     approval_mode: str = "auto"
     max_steps: int = Field(default=8, ge=1, le=30)
+    history_token_budget: int = Field(default=8_000, ge=512, le=64_000)
     trace_id: str | None = Field(default=None, max_length=128)
     callback_url: str | None = Field(default=None, max_length=2_000)
+    requested_by_id: UUID | None = None
+    workspace_owner_id: UUID | None = None
 
 
 class WorkspaceOpenRequest(BaseModel):
     path: str = Field(min_length=1)
+    owner_id: UUID | None = None
 
 
 class WorkspaceFileWriteRequest(BaseModel):
     root: str = Field(min_length=1)
     path: str = Field(min_length=1)
     content: str
+    owner_id: UUID | None = None
+
+
+class ProposedWorkspaceChange(BaseModel):
+    path: str = Field(min_length=1)
+    original_sha256: str = Field(min_length=64, max_length=64)
+    content: str
+
+
+class WorkspaceChangesApplyRequest(BaseModel):
+    root: str = Field(min_length=1)
+    changes: list[ProposedWorkspaceChange] = Field(min_length=1, max_length=100)
+    owner_id: UUID | None = None
 
 
 class ModelSettingsUpdateRequest(BaseModel):
@@ -190,15 +218,50 @@ class ModelSettingsUpdateRequest(BaseModel):
     local_model_name: str = Field(min_length=1, max_length=200)
 
 
+class RunCancellation:
+    """Cancellation signal that can also close an active upstream HTTP connection."""
+
+    def __init__(self) -> None:
+        self._cancelled = Event()
+        self._lock = RLock()
+        self._aborters: set[Callable[[], None]] = set()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+        with self._lock:
+            aborters = list(self._aborters)
+        for abort in aborters:
+            try:
+                abort()
+            except Exception:
+                logger.debug("model_abort_callback_failed", exc_info=True)
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def register_abort(self, abort: Callable[[], None]) -> Callable[[], None]:
+        with self._lock:
+            if self._cancelled.is_set():
+                abort()
+                return lambda: None
+            self._aborters.add(abort)
+
+        def unregister() -> None:
+            with self._lock:
+                self._aborters.discard(abort)
+
+        return unregister
+
+
 class CancellationRegistry:
     """Tracks active runs and cancellation tombstones across FastAPI worker threads."""
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._active: set[UUID] = set()
+        self._active: dict[UUID, RunCancellation] = {}
         self._cancelled: dict[UUID, float] = {}
 
-    def begin(self, run_id: UUID) -> None:
+    def begin(self, run_id: UUID) -> RunCancellation:
         with self._lock:
             self._purge()
             if run_id in self._active:
@@ -206,23 +269,31 @@ class CancellationRegistry:
                     status_code=409,
                     detail={"code": "RUN_ALREADY_ACTIVE", "message": "Agent run is already active"},
                 )
-            self._active.add(run_id)
+            control = RunCancellation()
+            if run_id in self._cancelled:
+                control.cancel()
+            self._active[run_id] = control
+            return control
 
     def finish(self, run_id: UUID) -> None:
         with self._lock:
-            self._active.discard(run_id)
+            self._active.pop(run_id, None)
             self._cancelled.pop(run_id, None)
 
     def cancel(self, run_id: UUID) -> bool:
         with self._lock:
             self._purge()
-            active = run_id in self._active
+            control = self._active.get(run_id)
+            active = control is not None
             self._cancelled[run_id] = monotonic()
-            return active
+        if control is not None:
+            control.cancel()
+        return active
 
     def is_cancelled(self, run_id: UUID) -> bool:
         with self._lock:
-            return run_id in self._cancelled
+            control = self._active.get(run_id)
+            return run_id in self._cancelled or (control is not None and control.is_cancelled())
 
     def _purge(self) -> None:
         cutoff = monotonic() - 600
@@ -232,6 +303,7 @@ class CancellationRegistry:
 
 
 cancellations = CancellationRegistry()
+redis_cancellations = RedisCancellationBridge(cancellations.cancel)
 
 
 class ProgressReporter:
@@ -239,10 +311,34 @@ class ProgressReporter:
         self.run_id = run_id
         self.trace_id = trace_id
         self.callback_url = callback_url
+        self._lock = RLock()
+        self._token_buffer = ""
 
     def emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.callback_url:
             return
+        if event_type == "agent.token.delta":
+            delta = payload.get("delta")
+            if isinstance(delta, str):
+                with self._lock:
+                    self._token_buffer += delta
+                    if len(self._token_buffer) < 80:
+                        return
+                    payload = {**payload, "delta": self._token_buffer}
+                    self._token_buffer = ""
+        else:
+            self.flush_tokens()
+        self._send(event_type, payload)
+
+    def flush_tokens(self) -> None:
+        with self._lock:
+            if not self._token_buffer:
+                return
+            delta = self._token_buffer
+            self._token_buffer = ""
+        self._send("agent.token.delta", {"delta": delta})
+
+    def _send(self, event_type: str, payload: dict[str, Any]) -> None:
         try:
             post_json(
                 self.callback_url,
@@ -287,24 +383,81 @@ def run_plain_chat(
     task: str,
     history: list[HistoryMessage],
     should_cancel: Any,
+    register_abort: Any,
     on_event: Any,
 ) -> dict[str, Any]:
     should_raise_cancelled(should_cancel)
     on_event("agent.step.started", {"step": 1})
     active_config = model_settings.active_config()
     model = OpenAICompatibleModel(active_config)
+    trimmed_history = trim_history_to_token_budget(history, active_config.history_token_budget)
     messages: list[dict[str, str]] = [
-        *[{"role": item.role, "content": item.content} for item in history],
+        *[{"role": item.role, "content": item.content} for item in trimmed_history],
         {"role": "user", "content": task},
     ]
-    message = model.complete(messages, tools=[], max_tokens=512, temperature=0.05, top_p=0.7)
+    try:
+        completion = model.complete(
+            messages,
+            tools=[],
+            max_tokens=512,
+            temperature=0.05,
+            top_p=0.7,
+            should_cancel=should_cancel,
+            register_abort=register_abort,
+            on_token=lambda delta: on_event("agent.token.delta", {"step": 1, "delta": delta}),
+        )
+    except ModelCancelledError as exc:
+        raise AgentRunCancelled("Agent run was cancelled") from exc
     should_raise_cancelled(should_cancel)
+    on_event(
+        "agent.model.completed",
+        {
+            "step": 1,
+            "tool_call_count": 0,
+            "provider": completion.provider,
+            "model_name": completion.model_name,
+            "request_count": completion.request_count,
+            "input_tokens": completion.usage.input_tokens,
+            "output_tokens": completion.usage.output_tokens,
+            "latency_ms": completion.latency_ms,
+        },
+    )
     on_event("agent.completed", {"steps": 1})
     return {
-        "final_answer": trim_repetitive_answer(message.get("content") or ""),
+        "final_answer": trim_repetitive_answer(completion.message.get("content") or ""),
         "steps": 1,
         "changed_files": [],
+        "model_provider": completion.provider,
+        "model_name": completion.model_name,
+        "model_request_count": completion.request_count,
+        "input_tokens": completion.usage.input_tokens,
+        "output_tokens": completion.usage.output_tokens,
+        "model_latency_ms": completion.latency_ms,
     }
+
+
+def estimate_tokens(text: str) -> int:
+    """Provider-neutral conservative estimate used before a provider tokenizer is available."""
+    ascii_count = sum(1 for char in text if ord(char) < 128)
+    non_ascii_count = len(text) - ascii_count
+    return max(1, (ascii_count + 3) // 4 + non_ascii_count)
+
+
+def trim_history_to_token_budget(history: list[HistoryMessage], budget: int) -> list[HistoryMessage]:
+    selected: list[HistoryMessage] = []
+    used = 0
+    for message in reversed(history):
+        cost = estimate_tokens(message.content) + 8
+        if selected and used + cost > budget:
+            break
+        if cost > budget:
+            allowed_chars = max(1, budget * 2)
+            selected.append(HistoryMessage(role=message.role, content=message.content[-allowed_chars:]))
+            break
+        selected.append(message)
+        used += cost
+    selected.reverse()
+    return selected
 
 
 def build_project_context(history: list[HistoryMessage], task: str) -> str:
@@ -333,13 +486,17 @@ def run_project_agent(
     request: AgentRunRequest,
     trace_id: str,
     should_cancel: Any,
+    register_abort: Any,
     on_event: Any,
 ) -> dict[str, Any]:
     if not request.workspace_root:
         raise WorkspaceError("项目模式下必须由业务服务传入项目工作区")
-    root = normalize_workspace_root(request.workspace_root)
-    before = snapshot_workspace(root)
-    tools = build_workspace_tools(root)
+    root = normalize_workspace_root(
+        request.workspace_root,
+        str(request.workspace_owner_id) if request.workspace_owner_id else None,
+    )
+    tools, tool_session = build_workspace_tools(root)
+    tool_names = [spec["function"]["name"] for spec in tools.specs()]
     active_config = model_settings.active_config()
     runtime = AgentRuntime(
         config=replace(active_config, max_steps=request.max_steps),
@@ -349,22 +506,34 @@ def run_project_agent(
         system_prompt=(
             "You are a coding agent working in one explicitly opened local project. "
             f"The project root is {root}. All tool paths must be relative to this root. "
-            "Available tools are exactly: list_files, file_read, file_write, search_files. "
-            "Inspect relevant files before editing. Use file_write only with complete file content. "
+            f"Available tools are exactly: {', '.join(tool_names)}. "
+            "Inspect relevant files before editing. Prefer apply_patch for small changes. All writes are staged proposals; "
+            "call git_diff before finishing and tell the user that confirmation is required. "
             "Never access paths outside the project, never invent tools, and only report changes confirmed by tool results. "
             "Answer the user in Chinese and mention the relative paths you changed."
         ),
     )
     result = runtime.run(
-        build_project_context(request.history, request.task),
+        build_project_context(
+            trim_history_to_token_budget(request.history, request.history_token_budget),
+            request.task,
+        ),
         should_cancel=should_cancel,
+        register_abort=register_abort,
         on_event=on_event,
     )
-    after = snapshot_workspace(root)
+    proposals = tool_session.proposals()
     return {
         "final_answer": result.final_answer,
         "steps": result.steps,
-        "changed_files": changed_workspace_files(before, after),
+        "changed_files": [],
+        "proposed_changes": proposals,
+        "model_provider": result.model_provider,
+        "model_name": result.model_name,
+        "model_request_count": result.model_request_count,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "model_latency_ms": result.model_latency_ms,
     }
 
 
@@ -412,7 +581,7 @@ def update_model_settings(payload: ModelSettingsUpdateRequest) -> dict[str, Any]
 def test_model_settings() -> dict[str, Any]:
     active_config = model_settings.active_config()
     try:
-        message = OpenAICompatibleModel(active_config).complete(
+        completion = OpenAICompatibleModel(active_config).complete(
             [
                 {"role": "system", "content": "You are a connectivity check. Reply with OK only."},
                 {"role": "user", "content": "ping"},
@@ -425,13 +594,12 @@ def test_model_settings() -> dict[str, Any]:
             "ok": True,
             "provider": active_config.model_provider,
             "model_name": active_config.model_name,
-            "response": (message.get("content") or "").strip()[:200],
+            "response": (completion.message.get("content") or "").strip()[:200],
         }
     except Exception as exc:
         logger.warning(
             "model_connection_test_failed",
-            extra={"event": "model_connection_test"},
-            exc_info=True,
+            extra={"event": "model_connection_test", "error_type": type(exc).__name__},
         )
         raise HTTPException(
             status_code=502,
@@ -446,18 +614,38 @@ def execute_agent_run(
 ) -> dict[str, Any]:
     trace_id = normalize_trace_id(request.trace_id or header_trace_id)
     reporter = ProgressReporter(request.run_id, trace_id, request.callback_url)
-    cancellations.begin(request.run_id)
+    cancellation = cancellations.begin(request.run_id)
+    if redis_cancellations.was_cancelled(request.run_id):
+        cancellation.cancel()
     context_token = TRACE_ID_CONTEXT.set(trace_id)
     try:
         logger.info("agent_run_started", extra={"run_id": str(request.run_id), "event": "agent_run_started"})
         reporter.emit("agent.request.accepted", {"mode": request.mode})
-        should_cancel = lambda: cancellations.is_cancelled(request.run_id)
+        should_cancel = cancellation.is_cancelled
         if request.mode == "project":
-            result = run_project_agent(request, trace_id, should_cancel, reporter.emit)
+            result = run_project_agent(request, trace_id, should_cancel, cancellation.register_abort, reporter.emit)
         else:
-            result = run_plain_chat(request.task, request.history, should_cancel, reporter.emit)
+            result = run_plain_chat(
+                request.task,
+                request.history,
+                should_cancel,
+                cancellation.register_abort,
+                reporter.emit,
+            )
         reporter.emit("agent.response.ready", {"steps": result["steps"]})
-        logger.info("agent_run_completed", extra={"run_id": str(request.run_id), "event": "agent_run_completed"})
+        logger.info(
+            "agent_run_completed",
+            extra={
+                "run_id": str(request.run_id),
+                "event": "agent_run_completed",
+                "model_provider": result.get("model_provider"),
+                "model_name": result.get("model_name"),
+                "model_request_count": result.get("model_request_count"),
+                "input_tokens": result.get("input_tokens"),
+                "output_tokens": result.get("output_tokens"),
+                "model_latency_ms": result.get("model_latency_ms"),
+            },
+        )
         return {**result, "trace_id": trace_id}
     except AgentRunCancelled as exc:
         reporter.emit("agent.cancelled", {})
@@ -470,6 +658,16 @@ def execute_agent_run(
         raise HTTPException(
             status_code=400,
             detail={"code": "WORKSPACE_ERROR", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    except ModelApiError as exc:
+        reporter.emit("agent.failed", {"code": exc.code})
+        logger.warning(
+            "model_api_failed",
+            extra={"run_id": str(request.run_id), "event": "model_api_failed", "error_code": exc.code},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code, "message": "模型服务暂时不可用，请稍后重试", "trace_id": trace_id},
         ) from exc
     except Exception as exc:
         logger.exception(
@@ -488,13 +686,18 @@ def execute_agent_run(
 
 @app.delete("/internal/v1/agent/runs/{run_id}")
 def cancel_agent_run(run_id: UUID) -> dict[str, Any]:
-    return {"ok": True, "run_id": str(run_id), "active": cancellations.cancel(run_id)}
+    active = cancellations.cancel(run_id)
+    redis_cancellations.publish(run_id)
+    return {"ok": True, "run_id": str(run_id), "active": active}
 
 
 @app.get("/internal/v1/workspaces/directories")
-def workspace_directories(path: str | None = Query(default=None)) -> dict[str, Any]:
+def workspace_directories(
+    path: str | None = Query(default=None),
+    owner_id: UUID | None = Query(default=None),
+) -> dict[str, Any]:
     try:
-        return list_directories(path)
+        return list_directories(path, str(owner_id) if owner_id else None)
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
@@ -502,25 +705,32 @@ def workspace_directories(path: str | None = Query(default=None)) -> dict[str, A
 @app.post("/internal/v1/workspaces/open")
 def open_workspace(payload: WorkspaceOpenRequest) -> dict[str, Any]:
     try:
-        root = normalize_workspace_root(payload.path)
+        root = normalize_workspace_root(payload.path, str(payload.owner_id) if payload.owner_id else None)
         return {"workspace": build_workspace_tree(root)}
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
 @app.get("/internal/v1/workspaces/tree")
-def workspace_tree(path: str = Query(min_length=1)) -> dict[str, Any]:
+def workspace_tree(
+    path: str = Query(min_length=1),
+    owner_id: UUID | None = Query(default=None),
+) -> dict[str, Any]:
     try:
-        root = normalize_workspace_root(path)
+        root = normalize_workspace_root(path, str(owner_id) if owner_id else None)
         return {"workspace": build_workspace_tree(root)}
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
 @app.get("/internal/v1/workspaces/file")
-def workspace_file(root: str = Query(min_length=1), path: str = Query(min_length=1)) -> dict[str, Any]:
+def workspace_file(
+    root: str = Query(min_length=1),
+    path: str = Query(min_length=1),
+    owner_id: UUID | None = Query(default=None),
+) -> dict[str, Any]:
     try:
-        workspace_root = normalize_workspace_root(root)
+        workspace_root = normalize_workspace_root(root, str(owner_id) if owner_id else None)
         return {"file": read_workspace_file(workspace_root, path)}
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
@@ -529,7 +739,20 @@ def workspace_file(root: str = Query(min_length=1), path: str = Query(min_length
 @app.put("/internal/v1/workspaces/file")
 def save_workspace_file(payload: WorkspaceFileWriteRequest) -> dict[str, Any]:
     try:
-        workspace_root = normalize_workspace_root(payload.root)
+        workspace_root = normalize_workspace_root(payload.root, str(payload.owner_id) if payload.owner_id else None)
         return {"file": write_workspace_file(workspace_root, payload.path, payload.content)}
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
+
+
+@app.post("/internal/v1/workspaces/changes/apply")
+def apply_proposed_workspace_changes(payload: WorkspaceChangesApplyRequest) -> dict[str, Any]:
+    try:
+        workspace_root = normalize_workspace_root(payload.root, str(payload.owner_id) if payload.owner_id else None)
+        changed = apply_workspace_changes(
+            workspace_root,
+            [change.model_dump() for change in payload.changes],
+        )
+        return {"ok": True, "changed_files": changed}
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=409, detail={"code": "WORKSPACE_CHANGED", "message": str(exc)}) from exc

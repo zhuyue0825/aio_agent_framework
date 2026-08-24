@@ -9,6 +9,7 @@ type ChatProps = {
   messages: Message[];
   busy: boolean;
   progress: string | null;
+  streamingText: string;
   username: string;
   canManageModel: boolean;
   onLogout: () => void;
@@ -38,6 +39,7 @@ export default function Chat({
   messages,
   busy,
   progress,
+  streamingText,
   username,
   canManageModel,
   onLogout,
@@ -52,7 +54,7 @@ export default function Chat({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, busy]);
+  }, [messages, busy, progress, streamingText]);
 
   async function submit() {
     const task = draft.trim();
@@ -177,6 +179,7 @@ export default function Chat({
               <div className="avatar">AI</div>
               <div className="bubble">
                 <div className="role">{progress ?? (mode === "project" ? "正在处理项目" : "正在回复")}</div>
+                {streamingText ? <div className="content streaming-content">{streamingText}</div> : null}
                 <div className="run-progress-row">
                   <div className="typing">
                     <span />

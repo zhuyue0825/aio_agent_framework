@@ -32,7 +32,7 @@ public class ProjectService {
 
     @Transactional
     public OpenProjectResult open(UserAccount user, String requestedPath) {
-        Map<String, Object> response = agentService.openWorkspace(requestedPath);
+        Map<String, Object> response = agentService.openWorkspace(requestedPath, user.getId());
         Map<String, Object> workspace = workspaceFrom(response);
         String root = requiredString(workspace, "root");
         String name = requiredString(workspace, "name");

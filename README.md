@@ -50,10 +50,10 @@ aio_agent_framework/
 ## 每个模块做什么
 
 - `config.py`：从环境变量读取模型地址、key、模型名、沙箱地址。
-- `http_json.py`：最小 HTTP JSON POST 封装。
+- `http_json.py`：带超时/鉴权/额度/服务错误分类和瞬时错误重试的 HTTP JSON 封装。
 - `sandbox.py`：AIO Sandbox REST API 客户端。
 - `tools.py`：工具注册表，把 Python 函数包装成模型可调用的 tool。
-- `model.py`：OpenAI-compatible Chat Completions 客户端。
+- `model.py`：OpenAI-compatible 流式 Chat Completions 客户端，支持退避重试、token 用量、耗时与主动取消。
 - `runtime.py`：Agent 主循环，负责模型调用、工具执行、结果回填。
 - `approval.py`：工具调用审批策略，拦截危险 shell 和越界写文件。
 - `trace.py`：把每一步运行轨迹写成 JSONL。
@@ -236,21 +236,21 @@ http://127.0.0.1:5173
 
 当前版本支持：
 
-- Spring Security 登录、JWT 和项目成员授权。
+- Spring Security 登录、短期 Access Token、HttpOnly Refresh Token、注销失效、密码修改/重置和项目成员授权。
 - PostgreSQL 保存会话、消息、项目、任务和事件，Flyway 管理表结构。
 - 旧 `data/app.sqlite3` 只作为幂等迁移源，不再由 FastAPI 读写。
 - 显式切换“纯对话”和“项目工作”，不再通过关键词猜测是否调用工具。
 - 在应用内打开本地文件夹，左侧浏览目录树，右侧预览、编辑和保存文本代码文件。
-- Agent 修改文件后刷新目录树、标记本次修改，并自动打开首个修改文件。
+- Agent 修改先展示统一 diff；用户确认且原文件哈希未变化后才真正写入。
 - 项目文件 API 会阻止 `..`、绝对路径和符号链接逃逸到已打开目录之外。
-- Java 提供异步任务、幂等键、超时、取消、SSE、Trace ID、Actuator 和 Prometheus 指标。
+- Java 通过 Redis Stream 分发任务，并提供并发保护、幂等键、重启恢复、超时、跨实例取消/SSE、Trace ID 和 Prometheus 指标。
 - FastAPI 只提供带内部令牌的 Agent/工作区接口。
 - 模型 Key 只保存在后端环境变量或本机配置文件中，不进入前端存储，也不会由设置接口回显。
 - 管理员可在页面右上角切换本地模型与远程 API；Key 仅保存在 Git 忽略的后端本机配置文件中，不会由接口回显。
 - 公网部署使用生产 Nginx/HTTPS 入口，仅发布 `443`；详见 `DEPLOYMENT.md`。
 - 公开注册默认关闭，Python 服务以非 root 用户运行且只能访问配置的工作区根目录。
 - 全服务 healthcheck、自动重启和日志轮转，PostgreSQL 定时备份，以及应用服务结构化日志和跨服务 `trace_id`。
-- GitHub Actions 自动检查 Java、Python、前端构建与 Compose 配置。
+- GitHub Actions 自动执行 Java/Python/Vitest/Playwright、Compose、CodeQL 与 Dependency Review 检查。
 
 ## 当前内置工具
 
@@ -262,10 +262,7 @@ http://127.0.0.1:5173
 
 ## 后续可以继续加的东西
 
-- 权限审批：危险命令、联网、删除文件前先问用户。
-- 任务 trace：把每一步工具调用保存成 JSONL。
-- MCP 支持：不直接写 REST tools，而是接 `/v1/mcp`。
-- Browser tools：click、type、get_text、screenshot 保存。
-- 多工作区管理：保存最近打开目录，并支持为不同对话绑定不同项目。
-- 成本统计：记录 token、模型调用次数、耗时。
-- Web UI：页面输入任务，实时显示 tool call。
+- 对长会话增加持久化摘要，而不只是按 token 预算保留最近消息。
+- 把受信任本地测试工具迁入独立执行沙箱，再允许公网多用户启用。
+- 为外部副作用工具增加可恢复的操作日志和更细粒度审批。
+- 根据实际模型价格把 token 用量换算成每用户成本报表。
