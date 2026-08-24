@@ -1,6 +1,7 @@
 package com.aioagent.business.run;
 
 import com.aioagent.business.agent.AgentServiceClient;
+import com.aioagent.business.agent.ModelOptionsService;
 import com.aioagent.business.auth.UserAccount;
 import com.aioagent.business.auth.UserRepository;
 import com.aioagent.business.common.ApiException;
@@ -45,6 +46,7 @@ public class AgentRunService {
     private final ObjectMapper mapper;
     private final AppProperties properties;
     private final RateLimitService rateLimits;
+    private final ModelOptionsService modelOptions;
 
     public AgentRunService(
             AgentRunRepository runs,
@@ -57,6 +59,7 @@ public class AgentRunService {
             AgentRunMetrics metrics,
             AppProperties properties,
             RateLimitService rateLimits,
+            ModelOptionsService modelOptions,
             ObjectMapper mapper) {
         this.runs = runs;
         this.users = users;
@@ -68,6 +71,7 @@ public class AgentRunService {
         this.metrics = metrics;
         this.properties = properties;
         this.rateLimits = rateLimits;
+        this.modelOptions = modelOptions;
         this.mapper = mapper;
     }
 
@@ -104,6 +108,7 @@ public class AgentRunService {
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "RUN_ALREADY_ACTIVE", "该会话已有运行中的任务");
         }
+        modelOptions.reserveRun(user, conversation.getModelProvider());
 
         Project project = null;
         if (mode == ConversationMode.PROJECT) {
@@ -128,6 +133,7 @@ public class AgentRunService {
                 user,
                 task,
                 mode,
+                conversation.getModelProvider().apiValue(),
                 approvalMode,
                 maxHistoryMessages,
                 idempotencyKey,
@@ -149,6 +155,7 @@ public class AgentRunService {
                 run.getId(),
                 run.getTask(),
                 run.getMode(),
+                run.getModelProvider(),
                 history,
                 run.getProject() == null ? null : run.getProject().getWorkspaceRoot(),
                 run.getApprovalMode(),
@@ -347,6 +354,7 @@ public class AgentRunService {
             UUID runId,
             String task,
             ConversationMode mode,
+            String modelProvider,
             List<AgentServiceClient.HistoryMessage> history,
             String workspaceRoot,
             String approvalMode,

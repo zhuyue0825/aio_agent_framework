@@ -411,6 +411,47 @@ button.primary:hover {
   white-space: nowrap;
 }
 
+.conversation-model-control {
+  max-width: 430px;
+  height: 34px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #334155;
+  border: 1px solid #d9e1ec;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.conversation-model-control > span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.conversation-model-control select {
+  min-width: 92px;
+  height: 26px;
+  padding: 0 22px 0 7px;
+  color: var(--text);
+  border: 0;
+  border-radius: 5px;
+  background-color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.conversation-model-control > strong {
+  max-width: 130px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .topbar-service-context {
   min-width: 0;
   display: flex;
@@ -1380,6 +1421,19 @@ input:focus {
   .model-switch-button > strong,
   .model-switch-button > svg:last-child {
     display: none;
+  }
+
+  .conversation-model-control {
+    max-width: 190px;
+  }
+
+  .conversation-model-control > span,
+  .conversation-model-control > strong {
+    display: none;
+  }
+
+  .conversation-model-control select {
+    min-width: 112px;
   }
 
   .messages,

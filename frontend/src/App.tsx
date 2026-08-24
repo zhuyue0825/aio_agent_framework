@@ -9,6 +9,8 @@ import {
   type AuthResponse,
   type Conversation,
   type Message,
+  type ModelOptions,
+  type ModelProvider,
   type Project,
   type RunEvent,
   type Status,
@@ -62,6 +64,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelOptions | null>(null);
   const [mode, setMode] = useState<AppMode>("chat");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -80,6 +83,12 @@ export default function App() {
   const [proposalBusy, setProposalBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
+
+  async function refreshModelOptions() {
+    const options = await api.modelOptions();
+    setModelOptions(options);
+    return options;
+  }
 
   async function refreshConversations(selectId?: string) {
     const data = await api.listConversations();
@@ -152,6 +161,12 @@ export default function App() {
       setStatus(null);
       setToast(err instanceof Error ? `状态检查失败：${err.message}` : String(err));
     }
+    try {
+      await refreshModelOptions();
+    } catch (err) {
+      setModelOptions(null);
+      setToast(err instanceof Error ? `模型选项读取失败：${err.message}` : String(err));
+    }
     const id = await refreshConversations();
     await loadMessages(id);
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
@@ -170,6 +185,7 @@ export default function App() {
     setAccessToken(null);
     setUser(null);
     setStatus(null);
+    setModelOptions(null);
     setConversations([]);
     setCurrentId(null);
     setMessages([]);
@@ -218,10 +234,23 @@ export default function App() {
 
   async function createConversation() {
     try {
-      const data = await api.createConversation();
+      const currentProvider = conversations.find((item) => item.id === currentId)?.model_provider ?? "local";
+      const data = await api.createConversation("新对话", currentProvider);
       const id = data.conversation.id;
       await refreshConversations(id);
       await loadMessages(id);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function selectConversationModel(provider: ModelProvider) {
+    if (!currentId || activeRun) return;
+    try {
+      const { conversation } = await api.updateConversationModel(currentId, provider);
+      setConversations((current) => current.map((item) => (item.id === conversation.id ? conversation : item)));
+      setToast(`当前对话已切换为 ${provider === "local" ? "MiniMind" : "DeepSeek"}`);
+      await refreshModelOptions();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
     }
@@ -300,6 +329,7 @@ export default function App() {
         await loadMessages(currentId);
       }
     } finally {
+      void refreshModelOptions().catch(() => undefined);
       runAbortRef.current = null;
       setActiveRun(null);
       setRunProgress(null);
@@ -375,6 +405,8 @@ export default function App() {
     return <AuthScreen onAuthenticated={authenticated} />;
   }
 
+  const currentConversation = conversations.find((item) => item.id === currentId) ?? null;
+
   return (
     <div className={`app ${mode === "project" ? "project-mode" : "chat-mode"} ${selectedFile ? "has-preview" : ""}`}>
       <Sidebar
@@ -393,6 +425,9 @@ export default function App() {
       />
       <Chat
         status={status}
+        modelOptions={modelOptions}
+        modelProvider={currentConversation?.model_provider ?? "local"}
+        hasConversation={Boolean(currentConversation)}
         mode={mode}
         workspace={workspace}
         messages={messages}
@@ -406,6 +441,7 @@ export default function App() {
         onModeChange={setMode}
         onOpenFolder={() => setFolderPickerOpen(true)}
         onOpenModelSettings={() => setModelSettingsOpen(true)}
+        onModelChange={selectConversationModel}
         onSend={send}
       />
       {mode === "project" ? (
@@ -437,8 +473,9 @@ export default function App() {
         onClose={() => setModelSettingsOpen(false)}
         onSaved={async (settings) => {
           setStatus(await api.status());
+          await refreshModelOptions();
           setToast(
-            `已切换为${settings.active_provider === "local" ? "本地模型" : "远程 API"}：${settings.active_model_name}`,
+            `已保存${settings.active_provider === "local" ? "本地模型" : "远程 API"}配置：${settings.active_model_name}`,
           );
         }}
       />

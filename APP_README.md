@@ -74,11 +74,17 @@ Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`�
 
 ### 在页面里切换模型
 
-使用管理员账号登录后，点击右上角当前模型即可打开“模型设置”：
+每个用户都可以在页面右上角为当前对话选择模型，选择会保存在该对话上，不影响其他用户或其他对话：
+
+- `MiniMind`：使用仓库内置的本地模型。
+- `DeepSeek`：使用管理员在服务端配置的远程模型；普通用户不会看到或提交 API Key。
+- DeepSeek 默认每个用户每天最多创建 20 个运行，按 `Asia/Shanghai` 自然日重置。使用 `AIO_DEEPSEEK_RUNS_PER_USER_PER_DAY` 和 `AIO_QUOTA_TIME_ZONE` 可调整；设为 `0` 表示不限制运行次数。
+
+管理员可以点击模型选择器旁边的设置按钮维护服务端配置：
 
 - `远程 API`：填写白名单内的 DeepSeek 或其他 OpenAI Chat Completions 兼容接口、模型名和 API Key。
 - `本地模型`：使用仓库内置 MiniMind，Compose 默认连接内部地址 `http://minimind:8998/v1`，模型名为 `minimind`。
-- “保存并应用”会让下一次对话使用新模型；“保存并测试”会额外发起一次最小模型请求。
+- “保存配置”只更新服务端模型资料；“保存并测试”会额外对当前测试目标发起一次最小模型请求。实际运行使用各对话自己的模型选择。
 
 API Key 只由浏览器发送给 Spring Boot，再通过内部令牌转发给 FastAPI。FastAPI 将它写入 Git 忽略的 `data/model-settings.json`，文件权限为 `600`；读取设置时只返回 `api_key_configured`，不会把 Key 回传到浏览器。
 

@@ -57,7 +57,7 @@ describe("authentication and model settings", () => {
     expect(keyInput.value).toBe("");
     expect(keyInput.type).toBe("password");
     await userEvent.click(screen.getByRole("button", { name: /本地模型/ }));
-    await userEvent.click(screen.getByRole("button", { name: "保存并应用" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
     await waitFor(() => expect(update).toHaveBeenCalled());
     expect(update.mock.calls[0][0].active_provider).toBe("local");
     expect(update.mock.calls[0][0]).not.toHaveProperty("remote_api_key");

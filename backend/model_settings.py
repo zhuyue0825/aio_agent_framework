@@ -161,10 +161,14 @@ class ModelSettingsStore:
 
     def active_config(self) -> AgentConfig:
         settings = self.snapshot()
-        profile = settings.local if settings.active_provider == "local" else settings.remote
+        return self.config_for(settings.active_provider)
+
+    def config_for(self, provider: ModelProvider) -> AgentConfig:
+        settings = self.snapshot()
+        profile = settings.local if provider == "local" else settings.remote
         return replace(
             self.base_config,
-            model_provider=settings.active_provider,
+            model_provider=provider,
             model_api_base=profile.api_base,
             model_api_key=profile.api_key,
             model_name=profile.model_name,

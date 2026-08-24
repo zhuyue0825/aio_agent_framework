@@ -1,9 +1,11 @@
 package com.aioagent.business.conversation;
 
+import com.aioagent.business.agent.ModelOptionsService;
 import com.aioagent.business.auth.CurrentUser;
 import com.aioagent.business.auth.UserAccount;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.data.domain.Page;
 import java.util.LinkedHashMap;
 import tools.jackson.databind.ObjectMapper;
@@ -28,11 +31,17 @@ public class ConversationController {
 
     private final CurrentUser currentUser;
     private final ConversationService service;
+    private final ModelOptionsService modelOptions;
     private final ObjectMapper mapper;
 
-    public ConversationController(CurrentUser currentUser, ConversationService service, ObjectMapper mapper) {
+    public ConversationController(
+            CurrentUser currentUser,
+            ConversationService service,
+            ModelOptionsService modelOptions,
+            ObjectMapper mapper) {
         this.currentUser = currentUser;
         this.service = service;
+        this.modelOptions = modelOptions;
         this.mapper = mapper;
     }
 
@@ -63,11 +72,14 @@ public class ConversationController {
             @Valid @RequestBody CreateConversationRequest request,
             Authentication authentication) {
         UserAccount user = currentUser.require(authentication);
+        ConversationModelProvider modelProvider = ConversationModelProvider.parse(request.modelProvider());
+        modelOptions.requireSelectable(user, modelProvider);
         Conversation conversation = service.create(
                 user,
                 request.title(),
                 request.projectId(),
-                parseMode(request.mode()));
+                parseMode(request.mode()),
+                modelProvider);
         return Map.of("conversation", ConversationDtos.ConversationResponse.from(conversation, 0));
     }
 
@@ -80,6 +92,25 @@ public class ConversationController {
         return Map.of(
                 "conversation",
                 ConversationDtos.ConversationResponse.from(conversation, service.messageCount(conversationId)));
+    }
+
+    @PutMapping("/{conversationId}/model")
+    public Map<String, ConversationDtos.ConversationResponse> selectModel(
+            @PathVariable UUID conversationId,
+            @Valid @RequestBody SelectModelRequest request,
+            Authentication authentication) {
+        UserAccount user = currentUser.require(authentication);
+        ConversationModelProvider modelProvider = ConversationModelProvider.parse(request.modelProvider());
+        modelOptions.requireSelectable(user, modelProvider);
+        Conversation conversation = service.selectModel(
+                user,
+                conversationId,
+                modelProvider);
+        return Map.of(
+                "conversation",
+                ConversationDtos.ConversationResponse.from(
+                        conversation,
+                        service.messageCount(conversationId)));
     }
 
     @DeleteMapping("/{conversationId}")
@@ -115,14 +146,21 @@ public class ConversationController {
     public record CreateConversationRequest(
             @Size(max = 80) String title,
             UUID projectId,
-            @Size(max = 20) String mode) {
+            @Size(max = 20) String mode,
+            @Pattern(regexp = "local|remote") String modelProvider) {
         public CreateConversationRequest {
             if (mode == null) {
                 mode = "chat";
+            }
+            if (modelProvider == null) {
+                modelProvider = "local";
             }
         }
     }
 
     public record RenameConversationRequest(@NotBlank @Size(max = 80) String title) {
+    }
+
+    public record SelectModelRequest(@NotBlank @Pattern(regexp = "local|remote") String modelProvider) {
     }
 }
