@@ -588,7 +588,7 @@ def test_model_settings() -> dict[str, Any]:
             ],
             tools=[],
             max_tokens=32,
-            temperature=0,
+            temperature=0.1,
         )
         return {
             "ok": True,

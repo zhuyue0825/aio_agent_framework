@@ -51,7 +51,7 @@ chmod 600 .env
 
 必须替换 PostgreSQL、Redis 密码、管理员密码、JWT Secret 和内部服务 Token；应用不再提供这些值的开发默认值。JWT Secret 与内部 Token 至少使用 32 个字符，管理员密码至少 12 个字符。模型 API Key 可以在管理员登录后的“模型设置”里填写；如果需要用环境变量自动初始化，也仍可设置 `MODEL_API_KEY`。
 
-2. 启动 PostgreSQL、Sandbox、Python 与 Java：
+2. 确认 MiniMind 权重位于 `minimind/out/full_sft_768.pth`，然后启动 PostgreSQL、Redis、MiniMind、Sandbox、Python 与 Java：
 
 ```bash
 docker compose up -d --build
@@ -77,20 +77,20 @@ Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`�
 使用管理员账号登录后，点击右上角当前模型即可打开“模型设置”：
 
 - `远程 API`：填写白名单内的 DeepSeek 或其他 OpenAI Chat Completions 兼容接口、模型名和 API Key。
-- `本地模型`：填写白名单内的本机 OpenAI 兼容地址，Compose 默认使用 `http://host.docker.internal:8010/v1`。
+- `本地模型`：使用仓库内置 MiniMind，Compose 默认连接内部地址 `http://minimind:8998/v1`，模型名为 `minimind`。
 - “保存并应用”会让下一次对话使用新模型；“保存并测试”会额外发起一次最小模型请求。
 
 API Key 只由浏览器发送给 Spring Boot，再通过内部令牌转发给 FastAPI。FastAPI 将它写入 Git 忽略的 `data/model-settings.json`，文件权限为 `600`；读取设置时只返回 `api_key_configured`，不会把 Key 回传到浏览器。
 
 公网部署应分别通过 `MODEL_REMOTE_ALLOWED_HOSTS` 和 `MODEL_LOCAL_ALLOWED_HOSTS` 固定可访问域名。不要为了临时调试把白名单改成任意地址。
 
-启动仓库内置的本地 DeepSeek 兼容服务：
+MiniMind 已由 `docker compose up -d --build` 自动启动，并配置了健康检查和异常自动重启。模型源码在镜像构建时固定到上游提交，权重通过 `MINIMIND_WEIGHTS_HOST_PATH`（默认 `./minimind/out`）只读挂载，不会复制进镜像或提交到 Git。宿主机仅在 `127.0.0.1:8998` 暴露接口，可执行：
 
 ```bash
-./scripts/run_local_deepseek_api.sh
+./scripts/test_minimind_api.sh
 ```
 
-它在宿主机 `8010` 端口提供接口。当前 Compose 中的 Agent 容器通过 `host.docker.internal` 访问该服务；仅在可信网络中运行这个无鉴权的本地端口。
+如果需要脱离 Docker 直接调试 MiniMind，仍可执行 `./scripts/run_minimind_api.sh`；运行前应先停止 Compose 中的 `minimind` 服务，避免占用同一个端口。
 
 ## 本地开发
 

@@ -14,6 +14,17 @@ Fill every required blank value in `.env`, including independent PostgreSQL and 
 
 Keep `MODEL_REMOTE_ALLOWED_HOSTS` and `MODEL_LOCAL_ALLOWED_HOSTS` narrow. The administrator UI can only save model endpoints whose host is on the corresponding list; this is the SSRF boundary, not a convenience setting.
 
+Remote API deployment does not start MiniMind. To use the local model in production, place
+`full_sft_768.pth` below `MINIMIND_WEIGHTS_HOST_PATH` and enable the opt-in profile:
+
+```bash
+docker compose -f docker-compose.prod.yml --profile local-model up -d --build
+docker compose -f docker-compose.prod.yml --profile local-model ps
+```
+
+The Agent reaches it only through the private Compose address `http://minimind:8998/v1`;
+the production stack does not publish port `8998` on the host.
+
 If the PostgreSQL volume already existed with an older password, recreate only PostgreSQL with the new environment and rotate the database role before starting the other services:
 
 ```bash

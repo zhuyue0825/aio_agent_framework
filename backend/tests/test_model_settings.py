@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import pytest
 from pathlib import Path
@@ -37,11 +38,21 @@ def settings_payload(**overrides: str) -> dict[str, str]:
         "remote_api_base": "https://api.deepseek.com",
         "remote_model_name": "deepseek-v4-flash",
         "remote_api_key": "dummy-api-key-never-return",
-        "local_api_base": "http://host.docker.internal:8010/v1",
-        "local_model_name": "local-deepseek",
+        "local_api_base": "http://minimind:8998/v1",
+        "local_model_name": "minimind",
     }
     payload.update(overrides)
     return payload
+
+
+def test_default_local_profile_points_to_minimind(tmp_path: Path) -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        public = make_store(tmp_path / "model-settings.json").public_view()
+
+    assert public["local"] == {
+        "api_base": "http://minimind:8998/v1",
+        "model_name": "minimind",
+    }
 
 
 def test_store_persists_secret_without_exposing_it(tmp_path: Path) -> None:
