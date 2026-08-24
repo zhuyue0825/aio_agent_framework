@@ -1,9 +1,12 @@
 import { Cloud, Cpu, FolderCode, FolderOpen, LogOut, MessageSquare, Send, Settings, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AppMode, Message, Status, Workspace } from "./api";
+import type { AppMode, Message, ModelOptions, ModelProvider, Status, Workspace } from "./api";
 
 type ChatProps = {
   status: Status | null;
+  modelOptions: ModelOptions | null;
+  modelProvider: ModelProvider;
+  hasConversation: boolean;
   mode: AppMode;
   workspace: Workspace | null;
   messages: Message[];
@@ -17,6 +20,7 @@ type ChatProps = {
   onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
   onOpenModelSettings: () => void;
+  onModelChange: (provider: ModelProvider) => Promise<void>;
   onSend: (task: string) => Promise<void>;
 };
 
@@ -34,6 +38,9 @@ function avatar(role: Message["role"]) {
 
 export default function Chat({
   status,
+  modelOptions,
+  modelProvider,
+  hasConversation,
   mode,
   workspace,
   messages,
@@ -47,6 +54,7 @@ export default function Chat({
   onModeChange,
   onOpenFolder,
   onOpenModelSettings,
+  onModelChange,
   onSend,
 }: ChatProps) {
   const [draft, setDraft] = useState("");
@@ -64,6 +72,9 @@ export default function Chat({
   }
 
   const projectReady = mode === "chat" || Boolean(workspace);
+  const selectedModel = modelOptions?.models.find((option) => option.provider === modelProvider);
+  const remoteModel = modelOptions?.models.find((option) => option.provider === "remote");
+  const remoteRemaining = modelOptions?.deepseek_quota.remaining;
   const prompts =
     mode === "chat"
       ? ["介绍一下你自己", "用通俗的话解释什么是大语言模型", "帮我整理一个学习计划"]
@@ -83,24 +94,33 @@ export default function Chat({
           </button>
         </div>
         <div className="topbar-context">
-          {canManageModel ? (
-            <button
-              className="model-switch-button"
-              title="切换本地模型或远程 API"
-              disabled={busy}
-              onClick={onOpenModelSettings}
+          <label
+            className="conversation-model-control"
+            title={remoteModel && !remoteModel.available ? remoteModel.unavailable_reason ?? undefined : "当前对话使用的模型"}
+          >
+            {modelProvider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
+            <span>当前对话</span>
+            <select
+              aria-label="当前对话模型"
+              value={modelProvider}
+              disabled={busy || !hasConversation}
+              onChange={(event) => void onModelChange(event.target.value as ModelProvider)}
             >
-              {status?.model_provider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
-              <span>{status?.model_provider === "local" ? "本地" : "API"}</span>
-              <strong>{status?.model_name ?? "连接中"}</strong>
-              <Settings size={14} />
+              <option value="local">
+                {modelOptions?.models.find((option) => option.provider === "local")?.display_name ?? "MiniMind"}
+              </option>
+              <option value="remote" disabled={Boolean(remoteModel && !remoteModel.available)}>
+                {remoteModel?.display_name ?? "DeepSeek"}
+                {remoteRemaining === null || remoteRemaining === undefined ? "" : `（今日剩余 ${remoteRemaining} 次）`}
+              </option>
+            </select>
+            <strong>{selectedModel?.model_name ?? status?.model_name ?? "连接中"}</strong>
+          </label>
+          {canManageModel ? (
+            <button className="icon-button" title="管理员模型配置" disabled={busy} onClick={onOpenModelSettings}>
+              <Settings size={16} />
             </button>
-          ) : (
-            <span className="context-label">
-              {status?.model_provider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
-              <strong>{status?.model_name ?? "连接中"}</strong>
-            </span>
-          )}
+          ) : null}
           <div className="topbar-service-context">
             {mode === "project" ? (
               workspace ? (

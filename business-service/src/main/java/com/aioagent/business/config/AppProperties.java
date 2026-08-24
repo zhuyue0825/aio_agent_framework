@@ -41,6 +41,8 @@ public class AppProperties {
         private int loginAttemptsPerMinute = 10;
         private int runsPerMinute = 20;
         private long dailyTokenLimit = 200_000;
+        private int deepseekRunsPerDay = 20;
+        private String quotaTimeZone = "Asia/Shanghai";
         private boolean publicRegistrationEnabled;
 
         public String getJwtSecret() {
@@ -113,6 +115,22 @@ public class AppProperties {
 
         public void setDailyTokenLimit(long dailyTokenLimit) {
             this.dailyTokenLimit = dailyTokenLimit;
+        }
+
+        public int getDeepseekRunsPerDay() {
+            return deepseekRunsPerDay;
+        }
+
+        public void setDeepseekRunsPerDay(int deepseekRunsPerDay) {
+            this.deepseekRunsPerDay = deepseekRunsPerDay;
+        }
+
+        public String getQuotaTimeZone() {
+            return quotaTimeZone;
+        }
+
+        public void setQuotaTimeZone(String quotaTimeZone) {
+            this.quotaTimeZone = quotaTimeZone;
         }
     }
 

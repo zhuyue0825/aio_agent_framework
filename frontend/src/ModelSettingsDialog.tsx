@@ -99,7 +99,7 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }: ModelSet
         <header className="dialog-header">
           <div>
             <h2 id="model-settings-title">模型设置</h2>
-            <p>切换本地模型或远程 OpenAI 兼容 API，下一次对话立即生效。</p>
+            <p>管理员在这里维护服务端模型和 API Key；用户只能在对话中选择已配置的模型。</p>
           </div>
           <button className="icon-button" title="关闭" disabled={saving} onClick={onClose}>
             <X size={17} />
@@ -191,7 +191,7 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }: ModelSet
             {saving ? "正在连接" : "保存并测试"}
           </button>
           <button className="primary" disabled={loading || saving || !valid} onClick={() => void save(false)}>
-            {saving ? "正在保存" : "保存并应用"}
+            {saving ? "正在保存" : "保存配置"}
           </button>
         </footer>
       </section>

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -21,6 +22,7 @@ import com.aioagent.business.common.ApiException;
 import com.aioagent.business.config.AppProperties;
 import com.aioagent.business.conversation.Conversation;
 import com.aioagent.business.conversation.ConversationMode;
+import com.aioagent.business.conversation.ConversationModelProvider;
 import com.aioagent.business.conversation.ConversationService;
 import com.aioagent.business.project.ProjectService;
 import com.aioagent.business.migration.LegacySqliteImporter;
@@ -117,7 +119,7 @@ class BusinessServiceIntegrationTest {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(4);
+        assertThat(migrationCount).isEqualTo(6);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
@@ -395,6 +397,144 @@ class BusinessServiceIntegrationTest {
                 .andExpect(jsonPath("$.active_provider").value("remote"))
                 .andExpect(jsonPath("$.remote.api_key_configured").value(true))
                 .andExpect(jsonPath("$.remote.api_key").doesNotExist());
+    }
+
+    @Test
+    void regularUserCanSelectAConfiguredModelWithoutSeeingTheApiKey() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("model-user-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "模型选择", null, ConversationMode.CHAT);
+        stubConfiguredModels();
+
+        mockMvc.perform(get("/api/v1/model-options")
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.models[0].provider").value("local"))
+                .andExpect(jsonPath("$.models[1].provider").value("remote"))
+                .andExpect(jsonPath("$.models[1].available").value(true))
+                .andExpect(jsonPath("$.models[1].api_key").doesNotExist())
+                .andExpect(jsonPath("$.deepseek_quota.remaining").isNumber());
+
+        mockMvc.perform(put("/api/v1/conversations/{conversationId}/model", conversation.getId())
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model_provider":"remote"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.model_provider").value("remote"));
+    }
+
+    @Test
+    void deepSeekDailyQuotaIsPerUserAndIdempotentReplaysDoNotConsumeIt() {
+        int previousLimit = properties.getSecurity().getDeepseekRunsPerDay();
+        properties.getSecurity().setDeepseekRunsPerDay(2);
+        try {
+            stubConfiguredModels();
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            UserAccount user = authService.register("quota-user-" + suffix, "password-1234").user();
+            Conversation conversation = conversations.create(
+                    user,
+                    "额度测试",
+                    null,
+                    ConversationMode.CHAT,
+                    ConversationModelProvider.REMOTE);
+
+            AgentRunService.CreateResult first = runs.create(
+                    user,
+                    conversation.getId(),
+                    "第一次",
+                    ConversationMode.CHAT,
+                    null,
+                    "auto",
+                    8,
+                    "quota-key-1-" + suffix,
+                    "quota-trace-1");
+            AgentRunService.CreateResult replay = runs.create(
+                    user,
+                    conversation.getId(),
+                    "第一次",
+                    ConversationMode.CHAT,
+                    null,
+                    "auto",
+                    8,
+                    "quota-key-1-" + suffix,
+                    "quota-trace-1");
+            assertThat(replay.created()).isFalse();
+            assertThat(replay.run().getId()).isEqualTo(first.run().getId());
+            runs.cancel(user, first.run().getId());
+
+            AgentRunService.CreateResult second = runs.create(
+                    user,
+                    conversation.getId(),
+                    "第二次",
+                    ConversationMode.CHAT,
+                    null,
+                    "auto",
+                    8,
+                    "quota-key-2-" + suffix,
+                    "quota-trace-2");
+            runs.cancel(user, second.run().getId());
+
+            conversations.delete(user, conversation.getId());
+            Conversation afterDeletion = conversations.create(
+                    user,
+                    "删除会话后额度仍保留",
+                    null,
+                    ConversationMode.CHAT,
+                    ConversationModelProvider.REMOTE);
+
+            assertThatThrownBy(() -> runs.create(
+                            user,
+                            afterDeletion.getId(),
+                            "第三次",
+                            ConversationMode.CHAT,
+                            null,
+                            "auto",
+                            8,
+                            "quota-key-3-" + suffix,
+                            "quota-trace-3"))
+                    .isInstanceOfSatisfying(ApiException.class, exception ->
+                            assertThat(exception.getCode()).isEqualTo("DEEPSEEK_DAILY_QUOTA_EXCEEDED"));
+
+            UserAccount other = authService.register("quota-other-" + suffix, "password-1234").user();
+            Conversation otherConversation = conversations.create(
+                    other,
+                    "独立额度",
+                    null,
+                    ConversationMode.CHAT,
+                    ConversationModelProvider.REMOTE);
+            assertThat(runs.create(
+                            other,
+                            otherConversation.getId(),
+                            "其他用户第一次",
+                            ConversationMode.CHAT,
+                            null,
+                            "auto",
+                            8,
+                            "quota-other-key-" + suffix,
+                            "quota-other-trace")
+                    .created()).isTrue();
+        } finally {
+            properties.getSecurity().setDeepseekRunsPerDay(previousLimit);
+        }
+    }
+
+    private void stubConfiguredModels() {
+        when(agentService.modelSettings()).thenReturn(Map.of(
+                "active_provider", "local",
+                "active_model_name", "minimind",
+                "remote", Map.of(
+                        "api_base", "https://api.deepseek.com",
+                        "model_name", "deepseek-chat",
+                        "api_key_configured", true),
+                "local", Map.of(
+                        "api_base", "http://minimind:8998/v1",
+                        "model_name", "minimind")));
     }
 
     @Test

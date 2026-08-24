@@ -72,7 +72,7 @@ public class AgentRun {
 
     private Integer steps;
 
-    @Column(name = "model_provider", length = 20)
+    @Column(name = "model_provider", nullable = false, length = 20)
     private String modelProvider;
 
     @Column(name = "model_name", length = 200)
@@ -137,6 +137,7 @@ public class AgentRun {
             UserAccount requestedBy,
             String task,
             ConversationMode mode,
+            String modelProvider,
             String approvalMode,
             int maxHistoryMessages,
             String idempotencyKey,
@@ -148,6 +149,7 @@ public class AgentRun {
         this.status = RunStatus.PENDING;
         this.task = task;
         this.mode = mode;
+        this.modelProvider = modelProvider;
         this.approvalMode = approvalMode;
         this.maxHistoryMessages = maxHistoryMessages;
         this.idempotencyKey = idempotencyKey;
@@ -184,13 +186,15 @@ public class AgentRun {
         if (status != RunStatus.RUNNING) {
             return;
         }
+        if (!this.modelProvider.equals(modelProvider)) {
+            throw new IllegalStateException("Agent service used a different model provider than requested");
+        }
         this.status = RunStatus.SUCCEEDED;
         this.finalAnswer = finalAnswer;
         this.steps = steps;
         this.changedFilesJson = changedFilesJson;
         this.proposedChangesJson = proposedChangesJson == null ? "[]" : proposedChangesJson;
         this.changeStatus = "[]".equals(this.proposedChangesJson) ? "NONE" : "PROPOSED";
-        this.modelProvider = modelProvider;
         this.modelName = modelName;
         this.modelRequestCount = modelRequestCount;
         this.inputTokens = inputTokens;

@@ -258,6 +258,7 @@ public class AgentServiceClient {
             UUID runId,
             String task,
             String mode,
+            String modelProvider,
             List<HistoryMessage> history,
             String workspaceRoot,
             String approvalMode,

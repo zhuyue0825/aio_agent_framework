@@ -22,6 +22,7 @@ export type Conversation = {
   id: string;
   title: string;
   mode: AppMode;
+  model_provider: ModelProvider;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -78,6 +79,25 @@ export type ModelConnectionTest = {
   provider: ModelProvider;
   model_name: string;
   response: string;
+};
+
+export type ModelOption = {
+  provider: ModelProvider;
+  display_name: string;
+  model_name: string;
+  available: boolean;
+  unavailable_reason: string | null;
+};
+
+export type ModelOptions = {
+  models: ModelOption[];
+  deepseek_quota: {
+    limit: number;
+    used: number;
+    remaining: number | null;
+    resets_at: string;
+    time_zone: string;
+  };
 };
 
 export type Project = {
@@ -375,12 +395,18 @@ export const api = {
     }),
   testModelSettings: () =>
     request<ModelConnectionTest>("/api/v1/model-settings/test", { method: "POST", body: "{}" }),
+  modelOptions: () => request<ModelOptions>("/api/v1/model-options"),
   listConversations: (page = 0, size = 50) =>
     request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
-  createConversation: (title = "新对话") =>
+  createConversation: (title = "新对话", modelProvider: ModelProvider = "local") =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {
       method: "POST",
-      body: JSON.stringify({ title, mode: "chat" }),
+      body: JSON.stringify({ title, mode: "chat", model_provider: modelProvider }),
+    }),
+  updateConversationModel: (id: string, modelProvider: ModelProvider) =>
+    request<{ conversation: Conversation }>(`/api/v1/conversations/${id}/model`, {
+      method: "PUT",
+      body: JSON.stringify({ model_provider: modelProvider }),
     }),
   deleteConversation: (id: string) =>
     request<{ ok: true }>(`/api/v1/conversations/${id}`, { method: "DELETE" }),

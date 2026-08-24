@@ -48,6 +48,8 @@ app:
     login-attempts-per-minute: ${AIO_LOGIN_ATTEMPTS_PER_MINUTE:10}
     runs-per-minute: ${AIO_RUNS_PER_MINUTE:20}
     daily-token-limit: ${AIO_DAILY_TOKEN_LIMIT:200000}
+    deepseek-runs-per-day: ${AIO_DEEPSEEK_RUNS_PER_USER_PER_DAY:20}
+    quota-time-zone: ${AIO_QUOTA_TIME_ZONE:Asia/Shanghai}
     public-registration-enabled: ${AIO_PUBLIC_REGISTRATION_ENABLED:false}
   agent:
     base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}

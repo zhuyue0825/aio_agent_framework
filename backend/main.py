@@ -14,7 +14,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent_framework.http_json import post_json
 from agent_framework.model import ModelApiError, ModelCancelledError, OpenAICompatibleModel
@@ -171,9 +171,12 @@ class HistoryMessage(BaseModel):
 
 
 class AgentRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     run_id: UUID
     task: str = Field(min_length=1, max_length=100_000)
     mode: Literal["chat", "project"] = "chat"
+    model_provider: Literal["local", "remote"] = "local"
     history: list[HistoryMessage] = Field(default_factory=list, max_length=30)
     workspace_root: str | None = None
     approval_mode: str = "auto"
@@ -382,13 +385,14 @@ def trim_repetitive_answer(text: str) -> str:
 def run_plain_chat(
     task: str,
     history: list[HistoryMessage],
+    model_provider: Literal["local", "remote"],
     should_cancel: Any,
     register_abort: Any,
     on_event: Any,
 ) -> dict[str, Any]:
     should_raise_cancelled(should_cancel)
     on_event("agent.step.started", {"step": 1})
-    active_config = model_settings.active_config()
+    active_config = model_settings.config_for(model_provider)
     model = OpenAICompatibleModel(active_config)
     trimmed_history = trim_history_to_token_budget(history, active_config.history_token_budget)
     messages: list[dict[str, str]] = [
@@ -497,7 +501,7 @@ def run_project_agent(
     )
     tools, tool_session = build_workspace_tools(root)
     tool_names = [spec["function"]["name"] for spec in tools.specs()]
-    active_config = model_settings.active_config()
+    active_config = model_settings.config_for(request.model_provider)
     runtime = AgentRuntime(
         config=replace(active_config, max_steps=request.max_steps),
         tools=tools,
@@ -628,6 +632,7 @@ def execute_agent_run(
             result = run_plain_chat(
                 request.task,
                 request.history,
+                request.model_provider,
                 should_cancel,
                 cancellation.register_abort,
                 reporter.emit,

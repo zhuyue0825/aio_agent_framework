@@ -39,6 +39,10 @@ public class Conversation {
     @Column(nullable = false, length = 20)
     private ConversationMode mode;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "model_provider", nullable = false, length = 20)
+    private ConversationModelProvider modelProvider;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -48,11 +52,17 @@ public class Conversation {
     protected Conversation() {
     }
 
-    public Conversation(UserAccount owner, Project project, String title, ConversationMode mode) {
+    public Conversation(
+            UserAccount owner,
+            Project project,
+            String title,
+            ConversationMode mode,
+            ConversationModelProvider modelProvider) {
         this.owner = owner;
         this.project = project;
         this.title = title;
         this.mode = mode;
+        this.modelProvider = modelProvider;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
     }
@@ -65,6 +75,11 @@ public class Conversation {
     public void bindProject(Project project) {
         this.project = project;
         this.mode = ConversationMode.PROJECT;
+        touch();
+    }
+
+    public void selectModel(ConversationModelProvider modelProvider) {
+        this.modelProvider = modelProvider;
         touch();
     }
 
@@ -90,6 +105,10 @@ public class Conversation {
 
     public ConversationMode getMode() {
         return mode;
+    }
+
+    public ConversationModelProvider getModelProvider() {
+        return modelProvider;
     }
 
     public Instant getCreatedAt() {

@@ -34,6 +34,7 @@ test("login, create a chat run, observe progress, and cancel", async ({ page }) 
     id: "conversation-1",
     title: "新对话",
     mode: "chat",
+    model_provider: "local",
     project_id: null,
     created_at: now,
     updated_at: now,
@@ -67,6 +68,23 @@ test("login, create a chat run, observe progress, and cancel", async ({ page }) 
           api_key_configured: true,
           max_steps: 8,
           supports_projects: true,
+        },
+      });
+    }
+    if (path === "/api/v1/model-options") {
+      return route.fulfill({
+        json: {
+          models: [
+            { provider: "local", display_name: "MiniMind", model_name: "minimind", available: true },
+            { provider: "remote", display_name: "DeepSeek", model_name: "deepseek-chat", available: true },
+          ],
+          deepseek_quota: {
+            limit: 20,
+            used: 0,
+            remaining: 20,
+            resets_at: now,
+            time_zone: "Asia/Shanghai",
+          },
         },
       });
     }

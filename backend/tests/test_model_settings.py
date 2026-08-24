@@ -89,6 +89,19 @@ def test_internal_settings_endpoint_switches_to_keyless_local_model(tmp_path: Pa
     OpenAICompatibleModel(store.active_config())
 
 
+def test_run_provider_uses_only_server_side_profiles(tmp_path: Path) -> None:
+    store = make_store(tmp_path / "model-settings.json")
+    store.update(**settings_payload())
+
+    remote = store.config_for("remote")
+    local = store.config_for("local")
+
+    assert remote.model_provider == "remote"
+    assert remote.model_api_key == "dummy-api-key-never-return"
+    assert local.model_provider == "local"
+    assert local.model_api_key is None
+
+
 def test_model_connection_test_does_not_return_credentials(tmp_path: Path) -> None:
     store = make_store(tmp_path / "model-settings.json")
     store.update(**settings_payload())

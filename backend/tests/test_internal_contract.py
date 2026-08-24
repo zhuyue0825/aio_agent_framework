@@ -28,6 +28,7 @@ def test_agent_run_accepts_history_and_propagates_trace_id() -> None:
         "run_id": str(run_id),
         "task": "继续回答",
         "mode": "chat",
+        "model_provider": "remote",
         "history": [{"role": "user", "content": "上一轮问题"}],
         "approval_mode": "auto",
         "max_steps": 8,
@@ -43,6 +44,25 @@ def test_agent_run_accepts_history_and_propagates_trace_id() -> None:
     args = run_plain_chat.call_args.args
     assert args[0] == "继续回答"
     assert [(message.role, message.content) for message in args[1]] == [("user", "上一轮问题")]
+    assert args[2] == "remote"
+
+
+def test_agent_run_rejects_client_supplied_model_credentials() -> None:
+    response = client.post(
+        "/internal/v1/agent/runs",
+        json={
+            "run_id": str(uuid4()),
+            "task": "不应执行",
+            "mode": "chat",
+            "model_provider": "remote",
+            "model_api_key": "client-must-not-control-this",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "VALIDATION_ERROR"
+    assert "client-must-not-control-this" not in response.text
 
 
 def test_cancel_endpoint_sets_cooperative_flag() -> None:

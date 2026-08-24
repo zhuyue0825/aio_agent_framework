@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import Chat from "../Chat";
-import type { Status } from "../api";
+import type { ModelOptions, Status } from "../api";
 
 const status: Status = {
   business_service: "UP",
@@ -15,11 +15,41 @@ const status: Status = {
   supports_projects: true,
 };
 
+const modelOptions: ModelOptions = {
+  models: [
+    {
+      provider: "local",
+      display_name: "MiniMind",
+      model_name: "minimind",
+      available: true,
+      unavailable_reason: null,
+    },
+    {
+      provider: "remote",
+      display_name: "DeepSeek",
+      model_name: "deepseek-chat",
+      available: true,
+      unavailable_reason: null,
+    },
+  ],
+  deepseek_quota: {
+    limit: 20,
+    used: 1,
+    remaining: 19,
+    resets_at: new Date(Date.now() + 86_400_000).toISOString(),
+    time_zone: "Asia/Shanghai",
+  },
+};
+
 it("sends a chat message and exposes cancellation for an active run", async () => {
   const send = vi.fn(async () => undefined);
   const cancel = vi.fn();
+  const changeModel = vi.fn(async () => undefined);
   const baseProps = {
     status,
+    modelOptions,
+    modelProvider: "local" as const,
+    hasConversation: true,
     mode: "chat" as const,
     workspace: null,
     messages: [],
@@ -32,6 +62,7 @@ it("sends a chat message and exposes cancellation for an active run", async () =
     onModeChange: vi.fn(),
     onOpenFolder: vi.fn(),
     onOpenModelSettings: vi.fn(),
+    onModelChange: changeModel,
     onSend: send,
   };
   const view = render(<Chat {...baseProps} busy={false} />);
@@ -44,4 +75,36 @@ it("sends a chat message and exposes cancellation for an active run", async () =
   expect(screen.getByText("正在")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "取消任务" }));
   expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("lets a regular user choose DeepSeek for the current conversation without exposing settings", async () => {
+  const changeModel = vi.fn(async () => undefined);
+  render(
+    <Chat
+      status={status}
+      modelOptions={modelOptions}
+      modelProvider="local"
+      hasConversation
+      mode="chat"
+      workspace={null}
+      messages={[]}
+      busy={false}
+      progress={null}
+      streamingText=""
+      username="regular-user"
+      canManageModel={false}
+      onLogout={vi.fn()}
+      onCancel={vi.fn()}
+      onModeChange={vi.fn()}
+      onOpenFolder={vi.fn()}
+      onOpenModelSettings={vi.fn()}
+      onModelChange={changeModel}
+      onSend={vi.fn(async () => undefined)}
+    />,
+  );
+
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "当前对话模型" }), "remote");
+  expect(changeModel).toHaveBeenCalledWith("remote");
+  expect(screen.queryByRole("button", { name: "管理员模型配置" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/API Key/)).not.toBeInTheDocument();
 });

@@ -38,7 +38,12 @@ public class ConversationService {
     public List<Conversation> listOrCreate(UserAccount user) {
         List<Conversation> result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(user.getId());
         if (result.isEmpty()) {
-            result = List.of(conversations.save(new Conversation(user, null, "新对话", ConversationMode.CHAT)));
+            result = List.of(conversations.save(new Conversation(
+                    user,
+                    null,
+                    "新对话",
+                    ConversationMode.CHAT,
+                    ConversationModelProvider.LOCAL)));
         }
         return result;
     }
@@ -49,7 +54,12 @@ public class ConversationService {
                 user.getId(),
                 PageRequest.of(page, size));
         if (page == 0 && result.isEmpty()) {
-            conversations.save(new Conversation(user, null, "新对话", ConversationMode.CHAT));
+            conversations.save(new Conversation(
+                    user,
+                    null,
+                    "新对话",
+                    ConversationMode.CHAT,
+                    ConversationModelProvider.LOCAL));
             result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(user.getId(), PageRequest.of(0, size));
         }
         return result;
@@ -57,18 +67,41 @@ public class ConversationService {
 
     @Transactional
     public Conversation create(UserAccount user, String title, UUID projectId, ConversationMode mode) {
+        return create(user, title, projectId, mode, ConversationModelProvider.LOCAL);
+    }
+
+    @Transactional
+    public Conversation create(
+            UserAccount user,
+            String title,
+            UUID projectId,
+            ConversationMode mode,
+            ConversationModelProvider modelProvider) {
         Project project = null;
         if (projectId != null) {
             project = projectService.requireMember(projectId, user);
             mode = ConversationMode.PROJECT;
         }
-        return conversations.save(new Conversation(user, project, normalizedTitle(title), mode));
+        return conversations.save(new Conversation(user, project, normalizedTitle(title), mode, modelProvider));
     }
 
     @Transactional
     public Conversation rename(UserAccount user, UUID conversationId, String title) {
         Conversation conversation = require(user, conversationId);
         conversation.rename(normalizedTitle(title));
+        return conversation;
+    }
+
+    @Transactional
+    public Conversation selectModel(
+            UserAccount user,
+            UUID conversationId,
+            ConversationModelProvider modelProvider) {
+        Conversation conversation = require(user, conversationId);
+        if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
+            throw new ApiException(HttpStatus.CONFLICT, "CONVERSATION_HAS_ACTIVE_RUN", "运行期间不能切换模型");
+        }
+        conversation.selectModel(modelProvider);
         return conversation;
     }
 
