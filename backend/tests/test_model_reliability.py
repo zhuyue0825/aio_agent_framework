@@ -43,6 +43,7 @@ def test_model_retries_transient_status_and_records_stream_usage(retry_status: i
         request_body = json.loads(request.content)
         assert request_body["stream"] is True
         assert request_body["stream_options"] == {"include_usage": True}
+        assert "max_tokens" not in request_body
         if attempts == 1:
             return httpx.Response(
                 retry_status,

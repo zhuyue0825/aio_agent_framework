@@ -98,8 +98,10 @@ public class AgentRunService {
                 "agent-run:" + user.getId(),
                 properties.getSecurity().getRunsPerMinute(),
                 Duration.ofMinutes(1));
-        ConversationModelProvider expectedProvider = conversationService.require(user, conversationId).getModelProvider();
-        modelOptions.requireConfigured(expectedProvider);
+        Conversation selectedConversation = conversationService.require(user, conversationId);
+        ConversationModelProvider expectedProvider = selectedConversation.getModelProvider();
+        String expectedModelId = selectedConversation.getModelId();
+        modelOptions.requireSelectable(user, expectedModelId);
         CreateResult result = transaction.execute(status -> createTransactional(
                 user,
                 conversationId,
@@ -110,7 +112,8 @@ public class AgentRunService {
                 maxHistoryMessages,
                 idempotencyKey,
                 traceId,
-                expectedProvider));
+                expectedProvider,
+                expectedModelId));
         if (result == null) {
             throw new IllegalStateException("Run creation transaction returned no result");
         }
@@ -127,7 +130,8 @@ public class AgentRunService {
             int maxHistoryMessages,
             String idempotencyKey,
             String traceId,
-            ConversationModelProvider expectedProvider) {
+            ConversationModelProvider expectedProvider,
+            String expectedModelId) {
         UserAccount managedUser = users.findLockedById(user.getId())
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "当前用户不存在"));
         Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(managedUser.getId(), idempotencyKey);
@@ -143,7 +147,8 @@ public class AgentRunService {
             }
         }
         Conversation conversation = conversationService.requireLocked(managedUser, conversationId);
-        if (conversation.getModelProvider() != expectedProvider) {
+        if (conversation.getModelProvider() != expectedProvider
+                || !conversation.getModelId().equals(expectedModelId)) {
             throw new ApiException(HttpStatus.CONFLICT, "MODEL_SELECTION_CHANGED", "对话模型刚刚发生变化，请重新发送");
         }
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
@@ -175,6 +180,7 @@ public class AgentRunService {
                 task,
                 mode,
                 conversation.getModelProvider().apiValue(),
+                conversation.getModelId(),
                 approvalMode,
                 maxHistoryMessages,
                 idempotencyKey,
@@ -218,6 +224,7 @@ public class AgentRunService {
                 run.getTask(),
                 run.getMode(),
                 run.getModelProvider(),
+                run.getModelId(),
                 history,
                 run.getProject() == null ? null : run.getProject().getWorkspaceRoot(),
                 run.getApprovalMode(),
@@ -258,6 +265,7 @@ public class AgentRunService {
         metadata.put("run_id", run.getId());
         metadata.put("trace_id", run.getTraceId());
         metadata.put("model_provider", response.modelProvider());
+        metadata.put("model_id", run.getModelId());
         metadata.put("model_name", response.modelName());
         metadata.put("model_request_count", response.modelRequestCount());
         if (response.inputTokens() != null) {
@@ -496,6 +504,7 @@ public class AgentRunService {
             String task,
             ConversationMode mode,
             String modelProvider,
+            String modelId,
             List<AgentServiceClient.HistoryMessage> history,
             String workspaceRoot,
             String approvalMode,

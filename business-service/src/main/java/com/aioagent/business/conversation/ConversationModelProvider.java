@@ -19,4 +19,8 @@ public enum ConversationModelProvider {
     public String apiValue() {
         return name().toLowerCase(Locale.ROOT);
     }
+
+    public String defaultModelId() {
+        return this == REMOTE ? "remote:deepseek" : "local:minimind-64m";
+    }
 }

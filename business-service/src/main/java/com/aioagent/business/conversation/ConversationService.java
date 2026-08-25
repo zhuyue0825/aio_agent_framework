@@ -43,7 +43,8 @@ public class ConversationService {
                     null,
                     "新对话",
                     ConversationMode.CHAT,
-                    ConversationModelProvider.LOCAL)));
+                    ConversationModelProvider.LOCAL,
+                    ConversationModelProvider.LOCAL.defaultModelId())));
         }
         return result;
     }
@@ -59,7 +60,8 @@ public class ConversationService {
                     null,
                     "新对话",
                     ConversationMode.CHAT,
-                    ConversationModelProvider.LOCAL));
+                    ConversationModelProvider.LOCAL,
+                    ConversationModelProvider.LOCAL.defaultModelId()));
             result = conversations.findAllByOwnerIdOrderByUpdatedAtDesc(user.getId(), PageRequest.of(0, size));
         }
         return result;
@@ -77,12 +79,29 @@ public class ConversationService {
             UUID projectId,
             ConversationMode mode,
             ConversationModelProvider modelProvider) {
+        return create(
+                user,
+                title,
+                projectId,
+                mode,
+                modelProvider,
+                modelProvider.defaultModelId());
+    }
+
+    @Transactional
+    public Conversation create(
+            UserAccount user,
+            String title,
+            UUID projectId,
+            ConversationMode mode,
+            ConversationModelProvider modelProvider,
+            String modelId) {
         Project project = null;
         if (projectId != null) {
             project = projectService.requireMember(projectId, user);
             mode = ConversationMode.PROJECT;
         }
-        return conversations.save(new Conversation(user, project, normalizedTitle(title), mode, modelProvider));
+        return conversations.save(new Conversation(user, project, normalizedTitle(title), mode, modelProvider, modelId));
     }
 
     @Transactional
@@ -97,11 +116,20 @@ public class ConversationService {
             UserAccount user,
             UUID conversationId,
             ConversationModelProvider modelProvider) {
+        return selectModel(user, conversationId, modelProvider, modelProvider.defaultModelId());
+    }
+
+    @Transactional
+    public Conversation selectModel(
+            UserAccount user,
+            UUID conversationId,
+            ConversationModelProvider modelProvider,
+            String modelId) {
         Conversation conversation = requireLocked(user, conversationId);
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "CONVERSATION_HAS_ACTIVE_RUN", "运行期间不能切换模型");
         }
-        conversation.selectModel(modelProvider);
+        conversation.selectModel(modelProvider, modelId);
         return conversation;
     }
 

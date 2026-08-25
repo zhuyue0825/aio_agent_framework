@@ -72,14 +72,17 @@ public class ConversationController {
             @Valid @RequestBody CreateConversationRequest request,
             Authentication authentication) {
         UserAccount user = currentUser.require(authentication);
-        ConversationModelProvider modelProvider = ConversationModelProvider.parse(request.modelProvider());
-        modelOptions.requireSelectable(user, modelProvider);
+        ModelOptionsService.Selection selection = modelOptions.resolveRequested(
+                user,
+                request.modelId(),
+                request.modelProvider());
         Conversation conversation = service.create(
                 user,
                 request.title(),
                 request.projectId(),
                 parseMode(request.mode()),
-                modelProvider);
+                selection.provider(),
+                selection.modelId());
         return Map.of("conversation", ConversationDtos.ConversationResponse.from(conversation, 0));
     }
 
@@ -100,12 +103,15 @@ public class ConversationController {
             @Valid @RequestBody SelectModelRequest request,
             Authentication authentication) {
         UserAccount user = currentUser.require(authentication);
-        ConversationModelProvider modelProvider = ConversationModelProvider.parse(request.modelProvider());
-        modelOptions.requireSelectable(user, modelProvider);
+        ModelOptionsService.Selection selection = modelOptions.resolveRequested(
+                user,
+                request.modelId(),
+                request.modelProvider());
         Conversation conversation = service.selectModel(
                 user,
                 conversationId,
-                modelProvider);
+                selection.provider(),
+                selection.modelId());
         return Map.of(
                 "conversation",
                 ConversationDtos.ConversationResponse.from(
@@ -147,7 +153,8 @@ public class ConversationController {
             @Size(max = 80) String title,
             UUID projectId,
             @Size(max = 20) String mode,
-            @Pattern(regexp = "local|remote") String modelProvider) {
+            @Pattern(regexp = "local|remote") String modelProvider,
+            @Size(max = 200) @Pattern(regexp = "[a-z0-9][a-z0-9:._/-]+") String modelId) {
         public CreateConversationRequest {
             if (mode == null) {
                 mode = "chat";
@@ -161,6 +168,13 @@ public class ConversationController {
     public record RenameConversationRequest(@NotBlank @Size(max = 80) String title) {
     }
 
-    public record SelectModelRequest(@NotBlank @Pattern(regexp = "local|remote") String modelProvider) {
+    public record SelectModelRequest(
+            @Pattern(regexp = "local|remote") String modelProvider,
+            @Size(max = 200) @Pattern(regexp = "[a-z0-9][a-z0-9:._/-]+") String modelId) {
+        public SelectModelRequest {
+            if (modelProvider == null) {
+                modelProvider = "local";
+            }
+        }
     }
 }

@@ -84,7 +84,7 @@ class ModelSettingsStore:
             host.strip().lower()
             for host in os.environ.get(
                 "MODEL_LOCAL_ALLOWED_HOSTS",
-                "minimind,host.docker.internal,localhost,127.0.0.1",
+                "minimind,minimind-94m,host.docker.internal,localhost,127.0.0.1",
             ).split(",")
             if host.strip()
         }

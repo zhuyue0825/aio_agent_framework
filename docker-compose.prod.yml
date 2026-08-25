@@ -92,7 +92,41 @@ services:
     logging: *default-logging
     environment:
       OMP_NUM_THREADS: ${MINIMIND_CPU_THREADS:-4}
-    command: ["python", "serve_openai_api.py", "--weight", "full_sft", "--device", "cpu"]
+    command: ["python", "serve_openai_api.py", "--weight", "${MINIMIND_WEIGHT:-full_sft}", "--lora_weight", "${MINIMIND_LORA_WEIGHT:-None}", "--device", "cpu"]
+    volumes:
+      - ${MINIMIND_WEIGHTS_HOST_PATH:-./minimind/out}:/opt/minimind/out:ro
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10002,gid=10002,mode=1770
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:8998/docs', timeout=3);
+          raise SystemExit(0 if response.status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 3m
+    stop_grace_period: 20s
+
+  minimind-94m:
+    profiles: [extra-models]
+    build:
+      context: ./ops/minimind
+    restart: unless-stopped
+    init: true
+    logging: *default-logging
+    environment:
+      OMP_NUM_THREADS: ${MINIMIND_94M_CPU_THREADS:-4}
+    command: ["python", "serve_openai_api.py", "--weight", "autodl-93m/full_sft_12l", "--num_hidden_layers", "12", "--device", "cpu"]
     volumes:
       - ${MINIMIND_WEIGHTS_HOST_PATH:-./minimind/out}:/opt/minimind/out:ro
     read_only: true
@@ -132,9 +166,14 @@ services:
       MODEL_NAME: ${MODEL_NAME:-deepseek-v4-flash}
       LOCAL_MODEL_API_BASE: ${LOCAL_MODEL_API_BASE:-http://minimind:8998/v1}
       LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-minimind}
+      MINIMIND_94M_API_BASE: ${MINIMIND_94M_API_BASE:-http://minimind-94m:8998/v1}
       MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-120}
       MODEL_MAX_RETRIES: ${MODEL_MAX_RETRIES:-3}
       MODEL_SETTINGS_PATH: /app/data/model-settings.json
+      MODEL_SCAN_ROOTS: /models/minimind:/models/huggingface
+      MODEL_REGISTRY_MANIFEST: /app/backend/model-registry.default.json
+      MODEL_RUNTIME_ENDPOINTS: ${MODEL_RUNTIME_ENDPOINTS:-}
+      MODEL_REGISTRY_CACHE_SECONDS: ${MODEL_REGISTRY_CACHE_SECONDS:-5}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-8}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN in .env}
       REDIS_HOST: redis
@@ -143,7 +182,7 @@ services:
       AIO_REDIS_KEY_PREFIX: ${AIO_REDIS_KEY_PREFIX:-aio}
       AIO_MULTI_TENANT_WORKSPACES: "true"
       MODEL_REMOTE_ALLOWED_HOSTS: ${MODEL_REMOTE_ALLOWED_HOSTS:-api.deepseek.com}
-      MODEL_LOCAL_ALLOWED_HOSTS: ${MODEL_LOCAL_ALLOWED_HOSTS:-minimind,host.docker.internal,localhost,127.0.0.1}
+      MODEL_LOCAL_ALLOWED_HOSTS: ${MODEL_LOCAL_ALLOWED_HOSTS:-minimind,host.docker.internal,localhost,127.0.0.1},minimind-94m
       AIO_ENABLE_LOCAL_TEST_TOOL: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -157,6 +196,8 @@ services:
       - ${AIO_WORKSPACE_HOST_PATH:?Set AIO_WORKSPACE_HOST_PATH in .env}:/workspaces
       - aio-agent-runtime-data:/app/data
       - aio-agent-traces:/app/traces
+      - ${MINIMIND_WEIGHTS_HOST_PATH:-./minimind/out}:/models/minimind:ro
+      - ${HF_MODELS_HOST_PATH:-./models}:/models/huggingface:ro
     expose:
       - "8000"
     read_only: true

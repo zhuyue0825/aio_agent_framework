@@ -135,7 +135,7 @@ class BusinessServiceIntegrationTest {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(7);
+        assertThat(migrationCount).isEqualTo(8);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
@@ -850,6 +850,45 @@ class BusinessServiceIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.conversation.model_provider").value("remote"));
+    }
+
+    @Test
+    void conversationSelectsASpecificRegisteredLocalModel() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("specific-model-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "具体模型", null, ConversationMode.CHAT);
+        when(agentService.registeredModels()).thenReturn(Map.of("models", List.of(
+                Map.of(
+                        "id", "local:minimind-64m",
+                        "provider", "local",
+                        "display_name", "MiniMind 64M",
+                        "model_name", "minimind",
+                        "source", "manifest",
+                        "available", true,
+                        "installed", true),
+                Map.of(
+                        "id", "local:minimind-94m",
+                        "provider", "local",
+                        "display_name", "MiniMind 94M",
+                        "model_name", "minimind-94m",
+                        "source", "manifest",
+                        "available", true,
+                        "installed", true))));
+
+        mockMvc.perform(put("/api/v1/conversations/{conversationId}/model", conversation.getId())
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"model_id":"local:minimind-94m"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversation.model_provider").value("local"))
+                .andExpect(jsonPath("$.conversation.model_id").value("local:minimind-94m"));
+
+        Conversation selected = conversations.require(user, conversation.getId());
+        assertThat(selected.getModelId()).isEqualTo("local:minimind-94m");
     }
 
     @Test

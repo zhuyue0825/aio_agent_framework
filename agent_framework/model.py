@@ -126,7 +126,7 @@ class OpenAICompatibleModel:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float = 0.8,
         *,
@@ -141,8 +141,9 @@ class OpenAICompatibleModel:
             "top_p": top_p,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": max_tokens,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

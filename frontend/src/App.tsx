@@ -10,7 +10,6 @@ import {
   type Conversation,
   type Message,
   type ModelOptions,
-  type ModelProvider,
   type Project,
   type RunEvent,
   type Status,
@@ -226,6 +225,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId]);
 
+  useEffect(() => {
+    if (!user) return undefined;
+    const timer = window.setInterval(() => {
+      void api.modelOptions().then(setModelOptions).catch(() => undefined);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [user]);
+
   async function authenticated(session: AuthResponse) {
     setAccessToken(session.access_token);
     setUser(session.user);
@@ -234,8 +241,10 @@ export default function App() {
 
   async function createConversation() {
     try {
-      const currentProvider = conversations.find((item) => item.id === currentId)?.model_provider ?? "local";
-      const data = await api.createConversation("新对话", currentProvider);
+      const currentModelId = conversations.find((item) => item.id === currentId)?.model_id
+        ?? modelOptions?.models.find((item) => item.available)?.id
+        ?? "local:minimind-64m";
+      const data = await api.createConversation("新对话", currentModelId);
       const id = data.conversation.id;
       await refreshConversations(id);
       await loadMessages(id);
@@ -244,12 +253,13 @@ export default function App() {
     }
   }
 
-  async function selectConversationModel(provider: ModelProvider) {
+  async function selectConversationModel(modelId: string) {
     if (!currentId || activeRun) return;
     try {
-      const { conversation } = await api.updateConversationModel(currentId, provider);
+      const { conversation } = await api.updateConversationModel(currentId, modelId);
       setConversations((current) => current.map((item) => (item.id === conversation.id ? conversation : item)));
-      setToast(`当前对话已切换为 ${provider === "local" ? "MiniMind" : "DeepSeek"}`);
+      const displayName = modelOptions?.models.find((item) => item.id === modelId)?.display_name ?? modelId;
+      setToast(`当前对话已切换为 ${displayName}`);
       await refreshModelOptions();
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
@@ -426,7 +436,7 @@ export default function App() {
       <Chat
         status={status}
         modelOptions={modelOptions}
-        modelProvider={currentConversation?.model_provider ?? "local"}
+        modelId={currentConversation?.model_id ?? "local:minimind-64m"}
         hasConversation={Boolean(currentConversation)}
         mode={mode}
         workspace={workspace}
