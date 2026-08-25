@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -96,6 +97,41 @@ def test_workspace_contract_uses_internal_paths(tmp_path: Path) -> None:
     assert saved.status_code == 200
     assert saved.json()["file"]["content"] == "print('after')\n"
     assert (tmp_path / "demo.py").read_text(encoding="utf-8") == "print('after')\n"
+
+
+def test_workspace_apply_operation_id_is_deduplicated(tmp_path: Path) -> None:
+    operation_id = uuid4()
+    original = "print('before')\n"
+    changed = "print('after')\n"
+    (tmp_path / "demo.py").write_text(original, encoding="utf-8")
+    request = {
+        "root": str(tmp_path),
+        "operation_id": str(operation_id),
+        "changes": [
+            {
+                "path": "demo.py",
+                "original_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+                "content": changed,
+            }
+        ],
+    }
+
+    with patch("backend.main.apply_workspace_changes", return_value=["demo.py"]) as apply:
+        first = client.post(
+            "/internal/v1/workspaces/changes/apply",
+            json=request,
+            headers=AUTH_HEADERS,
+        )
+        replay = client.post(
+            "/internal/v1/workspaces/changes/apply",
+            json=request,
+            headers=AUTH_HEADERS,
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    apply.assert_called_once()
 
 
 def test_workspace_rejects_paths_outside_configured_roots(tmp_path: Path, monkeypatch) -> None:

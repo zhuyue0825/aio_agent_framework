@@ -9,6 +9,9 @@ import org.springframework.data.repository.query.Param;
 import jakarta.persistence.LockModeType;
 
 public interface PasswordResetTokenRepository extends JpaRepository<PasswordResetToken, UUID> {
+    @Query("select token.user.id from PasswordResetToken token where token.tokenHash = :tokenHash")
+    Optional<UUID> findUserIdByTokenHash(@Param("tokenHash") String tokenHash);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select token from PasswordResetToken token where token.tokenHash = :tokenHash")
     Optional<PasswordResetToken> findLockedByTokenHash(@Param("tokenHash") String tokenHash);

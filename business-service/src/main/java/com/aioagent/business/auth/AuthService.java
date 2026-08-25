@@ -4,6 +4,7 @@ import com.aioagent.business.common.ApiException;
 import com.aioagent.business.config.AppProperties;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -50,7 +51,7 @@ public class AuthService {
     @Transactional
     public AuthResult login(String rawUsername, String password) {
         String username = normalizeUsername(rawUsername);
-        UserAccount user = users.findByUsernameIgnoreCase(username)
+        UserAccount user = users.findLockedByUsernameIgnoreCase(username)
                 .orElseThrow(() -> invalidCredentials());
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
             throw invalidCredentials();
@@ -60,13 +61,18 @@ public class AuthService {
 
     @Transactional
     public AuthResult refresh(String rawToken) {
-        RefreshToken current = refreshTokens.findLockedByTokenHash(TokenHashing.sha256(requiredToken(rawToken)))
+        String tokenHash = TokenHashing.sha256(requiredToken(rawToken));
+        UUID userId = refreshTokens.findUserIdByTokenHash(tokenHash)
+                .orElseThrow(() -> invalidRefreshToken());
+        UserAccount user = users.findLockedById(userId)
+                .orElseThrow(() -> invalidRefreshToken());
+        RefreshToken current = refreshTokens.findLockedByTokenHash(tokenHash)
                 .orElseThrow(() -> invalidRefreshToken());
         if (!current.isActive(Instant.now())) {
             throw invalidRefreshToken();
         }
         current.revoke();
-        return result(current.getUser());
+        return result(user);
     }
 
     @Transactional
@@ -78,7 +84,9 @@ public class AuthService {
     }
 
     @Transactional
-    public void changePassword(UserAccount user, String currentPassword, String newPassword) {
+    public void changePassword(UUID userId, String currentPassword, String newPassword) {
+        UserAccount user = users.findLockedById(userId)
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "当前用户不存在"));
         if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
             throw invalidCredentials();
         }
@@ -98,14 +106,19 @@ public class AuthService {
 
     @Transactional
     public void resetPassword(String rawToken, String newPassword) {
-        PasswordResetToken token = resetTokens.findLockedByTokenHash(TokenHashing.sha256(requiredResetToken(rawToken)))
+        String tokenHash = TokenHashing.sha256(requiredResetToken(rawToken));
+        UUID userId = resetTokens.findUserIdByTokenHash(tokenHash)
+                .orElseThrow(() -> invalidResetToken());
+        UserAccount user = users.findLockedById(userId)
+                .orElseThrow(() -> invalidResetToken());
+        PasswordResetToken token = resetTokens.findLockedByTokenHash(tokenHash)
                 .orElseThrow(() -> invalidResetToken());
         if (!token.isActive(Instant.now())) {
             throw invalidResetToken();
         }
         token.use();
-        token.getUser().changePasswordHash(passwordEncoder.encode(newPassword));
-        revokeAllRefreshTokens(token.getUser());
+        user.changePasswordHash(passwordEncoder.encode(newPassword));
+        revokeAllRefreshTokens(user);
     }
 
     private AuthResult result(UserAccount user) {
@@ -117,7 +130,7 @@ public class AuthService {
     }
 
     private void revokeAllRefreshTokens(UserAccount user) {
-        refreshTokens.findAllByUserId(user.getId()).forEach(RefreshToken::revoke);
+        refreshTokens.revokeAllActiveByUserId(user.getId(), Instant.now());
     }
 
     private ApiException invalidCredentials() {

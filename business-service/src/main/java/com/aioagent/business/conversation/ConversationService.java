@@ -87,7 +87,7 @@ public class ConversationService {
 
     @Transactional
     public Conversation rename(UserAccount user, UUID conversationId, String title) {
-        Conversation conversation = require(user, conversationId);
+        Conversation conversation = requireLocked(user, conversationId);
         conversation.rename(normalizedTitle(title));
         return conversation;
     }
@@ -97,7 +97,7 @@ public class ConversationService {
             UserAccount user,
             UUID conversationId,
             ConversationModelProvider modelProvider) {
-        Conversation conversation = require(user, conversationId);
+        Conversation conversation = requireLocked(user, conversationId);
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "CONVERSATION_HAS_ACTIVE_RUN", "运行期间不能切换模型");
         }
@@ -107,7 +107,7 @@ public class ConversationService {
 
     @Transactional
     public void delete(UserAccount user, UUID conversationId) {
-        Conversation conversation = require(user, conversationId);
+        Conversation conversation = requireLocked(user, conversationId);
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "CONVERSATION_HAS_ACTIVE_RUN", "运行中的会话不能删除");
         }
@@ -117,6 +117,18 @@ public class ConversationService {
     @Transactional(readOnly = true)
     public Conversation require(UserAccount user, UUID conversationId) {
         return conversations.findByIdAndOwnerId(conversationId, user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND", "会话不存在"));
+    }
+
+    @Transactional
+    public Conversation requireLocked(UserAccount user, UUID conversationId) {
+        return conversations.findLockedByIdAndOwnerId(conversationId, user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND", "会话不存在"));
+    }
+
+    @Transactional
+    public Conversation lock(UUID conversationId) {
+        return conversations.findLockedById(conversationId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "CONVERSATION_NOT_FOUND", "会话不存在"));
     }
 

@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -27,11 +30,17 @@ import com.aioagent.business.conversation.ConversationService;
 import com.aioagent.business.project.ProjectService;
 import com.aioagent.business.migration.LegacySqliteImporter;
 import com.aioagent.business.run.AgentRunService;
+import com.aioagent.business.run.AgentRun;
 import com.aioagent.business.run.RunEvent;
 import com.aioagent.business.run.RunEventRepository;
+import com.aioagent.business.run.RunStatus;
+import com.aioagent.business.run.WorkspaceChangeService;
+import com.aioagent.business.security.DeepSeekQuotaService;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Map;
 import java.util.List;
 import java.util.UUID;
@@ -39,6 +48,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import jakarta.servlet.http.Cookie;
 import org.springframework.test.web.servlet.MvcResult;
 import org.junit.jupiter.api.Test;
@@ -97,6 +107,12 @@ class BusinessServiceIntegrationTest {
     AgentRunService runs;
 
     @Autowired
+    WorkspaceChangeService workspaceChanges;
+
+    @Autowired
+    DeepSeekQuotaService deepSeekQuotas;
+
+    @Autowired
     RunEventRepository runEvents;
 
     @Autowired
@@ -119,7 +135,7 @@ class BusinessServiceIntegrationTest {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(6);
+        assertThat(migrationCount).isEqualTo(7);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
@@ -226,6 +242,66 @@ class BusinessServiceIntegrationTest {
     }
 
     @Test
+    void passwordChangePersistsAndRevokesExistingRefreshTokens() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "change-user-" + suffix;
+        AuthService.AuthResult original = authService.register(username, "password-1234");
+
+        authService.changePassword(original.user().getId(), "password-1234", "password-5678");
+
+        assertThatThrownBy(() -> authService.login(username, "password-1234"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("用户名或密码错误");
+        assertThat(authService.login(username, "password-5678").user().getUsername()).isEqualTo(username);
+        assertThatThrownBy(() -> authService.refresh(original.refreshToken()))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("登录会话无效");
+    }
+
+    @Test
+    void concurrentRefreshAndPasswordChangeCannotLeaveAnOldSessionActive() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "credential-race-" + suffix;
+        AuthService.AuthResult original = authService.register(username, "password-1234");
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Object> refreshed = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                try {
+                    return authService.refresh(original.refreshToken());
+                } catch (ApiException exception) {
+                    return exception;
+                }
+            });
+            Future<?> changed = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                authService.changePassword(original.user().getId(), "password-1234", "password-5678");
+                return null;
+            });
+            ready.await();
+            start.countDown();
+            Object refreshResult = refreshed.get();
+            changed.get();
+
+            if (refreshResult instanceof AuthService.AuthResult rotated) {
+                assertThatThrownBy(() -> authService.refresh(rotated.refreshToken()))
+                        .isInstanceOf(ApiException.class)
+                        .hasMessageContaining("登录会话无效");
+            }
+            assertThatThrownBy(() -> authService.refresh(original.refreshToken()))
+                    .isInstanceOf(ApiException.class)
+                    .hasMessageContaining("登录会话无效");
+            assertThat(authService.login(username, "password-5678").user().getUsername()).isEqualTo(username);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void runCreationIsIdempotentAndEnforcesOneActiveRunPerConversation() {
         UserAccount user = authService.register("run-owner", "password-1234").user();
         Conversation conversation = conversations.create(user, "幂等测试", null, ConversationMode.CHAT);
@@ -320,6 +396,247 @@ class BusinessServiceIntegrationTest {
     }
 
     @Test
+    void dispatchLeaseUsesTokensToRejectStaleQueueDeliveries() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("dispatch-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "派发租约", null, ConversationMode.CHAT);
+        AgentRun run = runs.create(
+                user,
+                conversation.getId(),
+                "测试派发",
+                ConversationMode.CHAT,
+                null,
+                "auto",
+                8,
+                "dispatch-key-" + suffix,
+                "dispatch-trace-" + suffix).run();
+        String firstToken = UUID.randomUUID().toString();
+        String secondToken = UUID.randomUUID().toString();
+
+        assertThat(runs.claimDispatch(run.getId(), firstToken)).isTrue();
+        assertThat(runs.claimDispatch(run.getId(), secondToken)).isFalse();
+        runs.releaseDispatch(run.getId(), firstToken);
+        assertThat(runs.claimDispatch(run.getId(), secondToken)).isTrue();
+        assertThat(runs.prepare(run.getId(), firstToken, "worker-old")).isEmpty();
+        assertThat(runs.prepare(run.getId(), secondToken, "worker-current")).isPresent();
+
+        runs.cancel(user, run.getId());
+    }
+
+    @Test
+    void anActiveWorkerHeartbeatRenewsTheLeaseAndOnlyAnExpiredLeaseIsRecovered() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("heartbeat-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "心跳续租", null, ConversationMode.CHAT);
+        AgentRun run = runs.create(
+                user,
+                conversation.getId(),
+                "长任务",
+                ConversationMode.CHAT,
+                null,
+                "auto",
+                8,
+                "heartbeat-key-" + suffix,
+                "heartbeat-trace-" + suffix).run();
+        String dispatchToken = UUID.randomUUID().toString();
+        assertThat(runs.claimDispatch(run.getId(), dispatchToken)).isTrue();
+        assertThat(runs.prepare(run.getId(), dispatchToken, "worker-live")).isPresent();
+        AgentRun prepared = runs.require(user, run.getId());
+        Instant firstLease = prepared.getLeaseExpiresAt();
+
+        assertThat(runs.heartbeat(run.getId(), "worker-stale")).isFalse();
+        assertThat(runs.heartbeat(run.getId(), "worker-live")).isTrue();
+        AgentRun renewed = runs.require(user, run.getId());
+        assertThat(renewed.getHeartbeatAt()).isNotNull();
+        assertThat(renewed.getLeaseExpiresAt()).isAfterOrEqualTo(firstLease);
+        assertThat(runs.expireStaleRun(run.getId(), Instant.now())).isFalse();
+
+        jdbcTemplate.update(
+                "update agent_runs set lease_expires_at = ? where id = ?",
+                Timestamp.from(Instant.now().minusSeconds(1)),
+                run.getId());
+        assertThat(runs.expireStaleRun(run.getId(), Instant.now())).isTrue();
+        assertThat(runs.require(user, run.getId()).getStatus()).isEqualTo(RunStatus.FAILED);
+    }
+
+    @Test
+    void switchingModelAndCreatingRunCannotProduceAMixedModelSelection() throws Exception {
+        stubConfiguredModels();
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("model-race-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "模型竞争", null, ConversationMode.CHAT);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Object> selected = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                try {
+                    return conversations.selectModel(user, conversation.getId(), ConversationModelProvider.REMOTE);
+                } catch (ApiException exception) {
+                    return exception;
+                }
+            });
+            Future<Object> created = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                try {
+                    return runs.create(
+                            user,
+                            conversation.getId(),
+                            "模型竞争任务",
+                            ConversationMode.CHAT,
+                            null,
+                            "auto",
+                            8,
+                            "model-race-key-" + suffix,
+                            "model-race-trace-" + suffix);
+                } catch (ApiException exception) {
+                    return exception;
+                }
+            });
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            Object selectionResult = selected.get(10, TimeUnit.SECONDS);
+            Object creationResult = created.get(10, TimeUnit.SECONDS);
+            Conversation current = conversations.require(user, conversation.getId());
+
+            if (creationResult instanceof AgentRunService.CreateResult result) {
+                assertThat(result.run().getModelProvider()).isEqualTo(current.getModelProvider().apiValue());
+                runs.cancel(user, result.run().getId());
+            } else {
+                assertThat(creationResult).isInstanceOf(ApiException.class);
+            }
+            if (selectionResult instanceof ApiException exception) {
+                assertThat(exception.getCode()).isEqualTo("CONVERSATION_HAS_ACTIVE_RUN");
+            }
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancelAndCompleteRaceEndsInExactlyOneTerminalState() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("terminal-race-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "终态竞争", null, ConversationMode.CHAT);
+        AgentRun run = runs.create(
+                user,
+                conversation.getId(),
+                "并发结束",
+                ConversationMode.CHAT,
+                null,
+                "auto",
+                8,
+                "terminal-key-" + suffix,
+                "terminal-trace-" + suffix).run();
+        String token = UUID.randomUUID().toString();
+        assertThat(runs.claimDispatch(run.getId(), token)).isTrue();
+        assertThat(runs.prepare(run.getId(), token, "terminal-worker")).isPresent();
+        AgentServiceClient.ExecutionResponse response = executionResponse("完成", List.of());
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> completed = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                runs.complete(run.getId(), response);
+                return null;
+            });
+            Future<?> cancelled = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                runs.cancel(user, run.getId());
+                return null;
+            });
+            ready.await();
+            start.countDown();
+            completed.get();
+            cancelled.get();
+        } finally {
+            executor.shutdownNow();
+        }
+
+        AgentRun terminal = runs.require(user, run.getId());
+        assertThat(terminal.getStatus()).isIn(RunStatus.SUCCEEDED, RunStatus.CANCELLED);
+        long terminalEvents = runEvents.findAllByRunIdOrderByIdAsc(run.getId()).stream()
+                .filter(event -> event.getEventType().equals("run.succeeded")
+                        || event.getEventType().equals("run.cancelled"))
+                .count();
+        assertThat(terminalEvents).isEqualTo(1);
+    }
+
+    @Test
+    void applyingAProposalIsClaimedBeforeTheWorkspaceWriteAndIsIdempotent() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("apply-owner-" + suffix, "password-1234").user();
+        String workspaceRoot = "/workspace/apply-" + suffix;
+        when(agentService.openWorkspace(anyString(), any(UUID.class))).thenReturn(Map.of(
+                "workspace",
+                Map.of("root", workspaceRoot, "name", "apply-test", "tree", List.of())));
+        ProjectService.OpenProjectResult opened = projects.open(user, workspaceRoot);
+        Conversation conversation = conversations.create(
+                user,
+                "应用修改竞争",
+                opened.project().getId(),
+                ConversationMode.PROJECT);
+        AgentRun run = runs.create(
+                user,
+                conversation.getId(),
+                "修改文件",
+                ConversationMode.PROJECT,
+                opened.project().getId(),
+                "confirm",
+                8,
+                "apply-key-" + suffix,
+                "apply-trace-" + suffix).run();
+        String dispatchToken = UUID.randomUUID().toString();
+        assertThat(runs.claimDispatch(run.getId(), dispatchToken)).isTrue();
+        assertThat(runs.prepare(run.getId(), dispatchToken, "apply-worker")).isPresent();
+        List<Map<String, Object>> proposals = List.of(Map.of(
+                "path", "app.py",
+                "original_sha256", "a".repeat(64),
+                "content", "print('new')\n",
+                "diff", "-old\n+new"));
+        runs.complete(run.getId(), executionResponse("修改已准备", proposals));
+
+        CountDownLatch enteredPython = new CountDownLatch(1);
+        CountDownLatch releasePython = new CountDownLatch(1);
+        when(agentService.applyWorkspaceChanges(anyString(), anyList(), any(UUID.class), any(UUID.class)))
+                .thenAnswer(invocation -> {
+                    enteredPython.countDown();
+                    if (!releasePython.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("workspace write was not released");
+                    }
+                    return List.of("app.py");
+                });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<AgentRun> firstApply = executor.submit(() -> workspaceChanges.apply(user, run.getId()));
+            assertThat(enteredPython.await(5, TimeUnit.SECONDS)).isTrue();
+
+            assertThatThrownBy(() -> workspaceChanges.apply(user, run.getId()))
+                    .isInstanceOfSatisfying(ApiException.class, exception ->
+                            assertThat(exception.getCode()).isEqualTo("CHANGES_ALREADY_APPLYING"));
+            assertThatThrownBy(() -> runs.rejectProposedChanges(user, run.getId()))
+                    .isInstanceOfSatisfying(ApiException.class, exception ->
+                            assertThat(exception.getCode()).isEqualTo("NO_PROPOSED_CHANGES"));
+
+            releasePython.countDown();
+            assertThat(firstApply.get(5, TimeUnit.SECONDS).getChangeStatus()).isEqualTo("APPLIED");
+            assertThat(workspaceChanges.apply(user, run.getId()).getChangeStatus()).isEqualTo("APPLIED");
+            verify(agentService, times(1))
+                    .applyWorkspaceChanges(anyString(), anyList(), any(UUID.class), any(UUID.class));
+        } finally {
+            releasePython.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void sseReconnectReplaysOnlyEventsAfterLastEventId() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         UserAccount user = authService.register("sse-" + suffix, "password-1234").user();
@@ -357,6 +674,51 @@ class BusinessServiceIntegrationTest {
     }
 
     @Test
+    void sseReconnectReplaysMoreThanFiveHundredEventsWithoutGaps() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("sse-long-" + suffix, "password-1234").user();
+        Conversation conversation = conversations.create(user, "长 SSE 重连", null, ConversationMode.CHAT);
+        AgentRun run = runs.create(
+                user,
+                conversation.getId(),
+                "测试长事件历史",
+                ConversationMode.CHAT,
+                null,
+                "auto",
+                8,
+                "sse-long-key-" + suffix,
+                "sse-long-trace-" + suffix).run();
+        jdbcTemplate.update(
+                """
+                insert into run_events(run_id, event_type, payload_json, created_at)
+                select ?, 'agent.progress', '{}', now()
+                from generate_series(1, 510)
+                """,
+                run.getId());
+        runs.cancel(user, run.getId());
+        Long finalEventId = jdbcTemplate.queryForObject(
+                "select max(id) from run_events where run_id = ?",
+                Long.class,
+                run.getId());
+
+        MvcResult stream = mockMvc.perform(get("/api/v1/runs/{runId}/events", run.getId())
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        String body = mockMvc.perform(asyncDispatch(stream))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(body).contains("id:" + finalEventId, "event:run.cancelled");
+        assertThat(body.split("event:", -1).length - 1).isEqualTo(512);
+    }
+
+    @Test
     void projectMembershipProtectsWorkspaceBusinessOperations() {
         UserAccount owner = authService.register("project-owner", "password-1234").user();
         UserAccount member = authService.register("project-member", "password-1234").user();
@@ -372,6 +734,67 @@ class BusinessServiceIntegrationTest {
         projects.addMember(opened.project().getId(), owner, member.getUsername());
         assertThat(projects.requireMember(opened.project().getId(), member).getId())
                 .isEqualTo(opened.project().getId());
+    }
+
+    @Test
+    void concurrentProjectOpenAndMemberAdditionUseDatabaseUpserts() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount owner = authService.register("upsert-owner-" + suffix, "password-1234").user();
+        UserAccount member = authService.register("upsert-member-" + suffix, "password-1234").user();
+        String root = "/workspace/upsert-" + suffix;
+        when(agentService.openWorkspace(anyString(), any(UUID.class))).thenReturn(Map.of(
+                "workspace",
+                Map.of("root", root, "name", "upsert", "tree", List.of())));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<ProjectService.OpenProjectResult>> opened = java.util.stream.IntStream.range(0, 2)
+                    .mapToObj(index -> executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return projects.open(owner, root);
+                    }))
+                    .toList();
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            UUID firstId = opened.get(0).get(10, TimeUnit.SECONDS).project().getId();
+            UUID secondId = opened.get(1).get(10, TimeUnit.SECONDS).project().getId();
+
+            assertThat(secondId).isEqualTo(firstId);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from projects where owner_id = ? and workspace_root = ?",
+                    Integer.class,
+                    owner.getId(),
+                    root)).isEqualTo(1);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from project_members where project_id = ? and user_id = ?",
+                    Integer.class,
+                    firstId,
+                    owner.getId())).isEqualTo(1);
+
+            CountDownLatch memberReady = new CountDownLatch(2);
+            CountDownLatch memberStart = new CountDownLatch(1);
+            List<Future<Object>> additions = java.util.stream.IntStream.range(0, 2)
+                    .mapToObj(index -> executor.submit(() -> {
+                        memberReady.countDown();
+                        memberStart.await();
+                        return (Object) projects.addMember(firstId, owner, member.getUsername());
+                    }))
+                    .toList();
+            assertThat(memberReady.await(5, TimeUnit.SECONDS)).isTrue();
+            memberStart.countDown();
+            additions.get(0).get(10, TimeUnit.SECONDS);
+            additions.get(1).get(10, TimeUnit.SECONDS);
+            assertThat(jdbcTemplate.queryForObject(
+                    "select count(*) from project_members where project_id = ? and user_id = ?",
+                    Integer.class,
+                    firstId,
+                    member.getId())).isEqualTo(1);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -524,6 +947,49 @@ class BusinessServiceIntegrationTest {
         }
     }
 
+    @Test
+    void deepSeekQuotaCannotBeOverspentByConcurrentRequests() throws Exception {
+        int previousLimit = properties.getSecurity().getDeepseekRunsPerDay();
+        properties.getSecurity().setDeepseekRunsPerDay(2);
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("quota-race-" + suffix, "password-1234").user();
+        int contenders = 8;
+        CountDownLatch ready = new CountDownLatch(contenders);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(contenders);
+        try {
+            List<Future<Object>> attempts = java.util.stream.IntStream.range(0, contenders)
+                    .mapToObj(index -> executor.<Object>submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        try {
+                            deepSeekQuotas.consume(user.getId());
+                            return "consumed";
+                        } catch (ApiException exception) {
+                            return exception;
+                        }
+                    }))
+                    .toList();
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            List<Object> results = attempts.stream().map(future -> {
+                try {
+                    return future.get(10, TimeUnit.SECONDS);
+                } catch (Exception exception) {
+                    throw new AssertionError(exception);
+                }
+            }).toList();
+
+            assertThat(results.stream().filter("consumed"::equals).count()).isEqualTo(2);
+            assertThat(results.stream().filter(ApiException.class::isInstance).count()).isEqualTo(6);
+            assertThat(deepSeekQuotas.snapshot(user.getId()).used()).isEqualTo(2);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            properties.getSecurity().setDeepseekRunsPerDay(previousLimit);
+        }
+    }
+
     private void stubConfiguredModels() {
         when(agentService.modelSettings()).thenReturn(Map.of(
                 "active_provider", "local",
@@ -535,6 +1001,23 @@ class BusinessServiceIntegrationTest {
                 "local", Map.of(
                         "api_base", "http://minimind:8998/v1",
                         "model_name", "minimind")));
+    }
+
+    private AgentServiceClient.ExecutionResponse executionResponse(
+            String finalAnswer,
+            List<Map<String, Object>> proposedChanges) {
+        return new AgentServiceClient.ExecutionResponse(
+                finalAnswer,
+                1,
+                List.of(),
+                proposedChanges,
+                "trace-integration",
+                "local",
+                "minimind",
+                1,
+                10L,
+                2L,
+                5L);
     }
 
     @Test

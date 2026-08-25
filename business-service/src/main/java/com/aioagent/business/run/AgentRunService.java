@@ -7,6 +7,7 @@ import com.aioagent.business.auth.UserRepository;
 import com.aioagent.business.common.ApiException;
 import com.aioagent.business.conversation.Conversation;
 import com.aioagent.business.conversation.ConversationMode;
+import com.aioagent.business.conversation.ConversationModelProvider;
 import com.aioagent.business.conversation.ConversationService;
 import com.aioagent.business.conversation.Message;
 import com.aioagent.business.conversation.MessageRepository;
@@ -27,6 +28,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.data.domain.PageRequest;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -47,6 +49,7 @@ public class AgentRunService {
     private final AppProperties properties;
     private final RateLimitService rateLimits;
     private final ModelOptionsService modelOptions;
+    private final TransactionTemplate transaction;
 
     public AgentRunService(
             AgentRunRepository runs,
@@ -60,6 +63,7 @@ public class AgentRunService {
             AppProperties properties,
             RateLimitService rateLimits,
             ModelOptionsService modelOptions,
+            TransactionTemplate transaction,
             ObjectMapper mapper) {
         this.runs = runs;
         this.users = users;
@@ -72,10 +76,10 @@ public class AgentRunService {
         this.properties = properties;
         this.rateLimits = rateLimits;
         this.modelOptions = modelOptions;
+        this.transaction = transaction;
         this.mapper = mapper;
     }
 
-    @Transactional
     public CreateResult create(
             UserAccount user,
             UUID conversationId,
@@ -86,8 +90,6 @@ public class AgentRunService {
             int maxHistoryMessages,
             String idempotencyKey,
             String traceId) {
-        users.findLockedById(user.getId())
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "当前用户不存在"));
         Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(user.getId(), idempotencyKey);
         if (existing.isPresent()) {
             return new CreateResult(existing.get(), false);
@@ -96,26 +98,65 @@ public class AgentRunService {
                 "agent-run:" + user.getId(),
                 properties.getSecurity().getRunsPerMinute(),
                 Duration.ofMinutes(1));
+        ConversationModelProvider expectedProvider = conversationService.require(user, conversationId).getModelProvider();
+        modelOptions.requireConfigured(expectedProvider);
+        CreateResult result = transaction.execute(status -> createTransactional(
+                user,
+                conversationId,
+                task,
+                mode,
+                projectId,
+                approvalMode,
+                maxHistoryMessages,
+                idempotencyKey,
+                traceId,
+                expectedProvider));
+        if (result == null) {
+            throw new IllegalStateException("Run creation transaction returned no result");
+        }
+        return result;
+    }
+
+    private CreateResult createTransactional(
+            UserAccount user,
+            UUID conversationId,
+            String task,
+            ConversationMode mode,
+            UUID projectId,
+            String approvalMode,
+            int maxHistoryMessages,
+            String idempotencyKey,
+            String traceId,
+            ConversationModelProvider expectedProvider) {
+        UserAccount managedUser = users.findLockedById(user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "当前用户不存在"));
+        Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(managedUser.getId(), idempotencyKey);
+        if (existing.isPresent()) {
+            return new CreateResult(existing.get(), false);
+        }
         long dailyLimit = properties.getSecurity().getDailyTokenLimit();
         if (dailyLimit > 0) {
             Instant dayStart = Instant.now().truncatedTo(ChronoUnit.DAYS);
-            long used = runs.sumTokensSince(user.getId(), dayStart);
+            long used = runs.sumTokensSince(managedUser.getId(), dayStart);
             if (used >= dailyLimit) {
                 throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "TOKEN_QUOTA_EXCEEDED", "今日模型额度已用完");
             }
         }
-        Conversation conversation = conversationService.require(user, conversationId);
+        Conversation conversation = conversationService.requireLocked(managedUser, conversationId);
+        if (conversation.getModelProvider() != expectedProvider) {
+            throw new ApiException(HttpStatus.CONFLICT, "MODEL_SELECTION_CHANGED", "对话模型刚刚发生变化，请重新发送");
+        }
         if (runs.existsByConversationIdAndStatusIn(conversationId, ACTIVE_STATUSES)) {
             throw new ApiException(HttpStatus.CONFLICT, "RUN_ALREADY_ACTIVE", "该会话已有运行中的任务");
         }
-        modelOptions.reserveRun(user, conversation.getModelProvider());
+        modelOptions.consumeRun(managedUser, conversation.getModelProvider());
 
         Project project = null;
         if (mode == ConversationMode.PROJECT) {
             if (projectId == null) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "PROJECT_REQUIRED", "项目模式必须指定项目");
             }
-            project = projectService.requireMember(projectId, user);
+            project = projectService.requireMember(projectId, managedUser);
             conversation.bindProject(project);
         } else {
             conversation.touch();
@@ -130,7 +171,7 @@ public class AgentRunService {
                 conversation,
                 userMessage,
                 project,
-                user,
+                managedUser,
                 task,
                 mode,
                 conversation.getModelProvider().apiValue(),
@@ -143,12 +184,33 @@ public class AgentRunService {
     }
 
     @Transactional
-    public Optional<PreparedExecution> prepare(UUID runId) {
-        AgentRun run = runs.findById(runId).orElse(null);
-        if (run == null || run.getStatus() != RunStatus.PENDING) {
+    public boolean claimDispatch(UUID runId, String dispatchToken) {
+        Instant now = Instant.now();
+        return runs.claimDispatch(
+                runId,
+                RunStatus.PENDING,
+                dispatchToken,
+                now,
+                now.plus(properties.getAgent().getDispatchLease())) == 1;
+    }
+
+    @Transactional
+    public void releaseDispatch(UUID runId, String dispatchToken) {
+        runs.releaseDispatch(runId, RunStatus.PENDING, dispatchToken);
+    }
+
+    @Transactional
+    public Optional<PreparedExecution> prepare(UUID runId, String dispatchToken, String workerId) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
+        if (run == null
+                || run.getStatus() != RunStatus.PENDING
+                || !java.util.Objects.equals(run.getDispatchToken(), dispatchToken)) {
             return Optional.empty();
         }
-        run.markRunning();
+        run.markRunning(
+                dispatchToken,
+                workerId,
+                Instant.now().plus(properties.getAgent().getRecoveryStaleAfter()));
         eventService.append(run, "run.started", Map.of("status", run.getStatus().name()));
         List<AgentServiceClient.HistoryMessage> history = buildHistory(run);
         return Optional.of(new PreparedExecution(
@@ -167,7 +229,7 @@ public class AgentRunService {
 
     @Transactional
     public void complete(UUID runId, AgentServiceClient.ExecutionResponse response) {
-        AgentRun run = runs.findById(runId).orElseThrow();
+        AgentRun run = runs.findLockedById(runId).orElseThrow();
         if (run.getStatus() != RunStatus.RUNNING) {
             return;
         }
@@ -213,7 +275,7 @@ public class AgentRunService {
                 MessageRole.ASSISTANT,
                 response.finalAnswer() == null ? "" : response.finalAnswer(),
                 toJson(metadata)));
-        run.getConversation().touch();
+        conversationService.lock(run.getConversation().getId()).touch();
         eventService.append(run, "run.succeeded", Map.of(
                 "status", run.getStatus().name(),
                 "steps", response.steps(),
@@ -225,19 +287,49 @@ public class AgentRunService {
     }
 
     @Transactional
-    public void fail(UUID runId, RunStatus status, String code, String message) {
-        AgentRun run = runs.findById(runId).orElse(null);
+    public boolean fail(UUID runId, RunStatus status, String code, String message) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
         if (run == null || run.getStatus().isTerminal()) {
-            return;
+            return false;
         }
+        failLocked(run, status, code, message);
+        return true;
+    }
+
+    @Transactional
+    public boolean expireStaleRun(UUID runId, Instant now) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
+        if (run == null
+                || run.getStatus() != RunStatus.RUNNING
+                || run.getLeaseExpiresAt() == null
+                || !run.getLeaseExpiresAt().isBefore(now)) {
+            return false;
+        }
+        failLocked(run, RunStatus.FAILED, "RUN_INTERRUPTED", "服务重启或任务执行中断，请重新发送");
+        return true;
+    }
+
+    @Transactional
+    public boolean heartbeat(UUID runId, String workerId) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
+        if (run == null
+                || run.getStatus() != RunStatus.RUNNING
+                || !java.util.Objects.equals(run.getWorkerId(), workerId)) {
+            return false;
+        }
+        run.heartbeat(Instant.now().plus(properties.getAgent().getRecoveryStaleAfter()));
+        return true;
+    }
+
+    private void failLocked(AgentRun run, RunStatus status, String code, String message) {
         String safeMessage = message == null || message.isBlank() ? "Agent 任务执行失败" : message;
         run.markFailed(status, code, safeMessage);
         messages.save(new Message(
                 run.getConversation(),
                 MessageRole.ERROR,
                 safeMessage,
-                toJson(Map.of("run_id", runId, "error_code", code, "trace_id", run.getTraceId()))));
-        run.getConversation().touch();
+                toJson(Map.of("run_id", run.getId(), "error_code", code, "trace_id", run.getTraceId()))));
+        conversationService.lock(run.getConversation().getId()).touch();
         String eventType = status == RunStatus.TIMED_OUT ? "run.timed_out" : "run.failed";
         eventService.append(run, eventType, Map.of("status", status.name(), "error_code", code, "message", safeMessage));
         metrics.terminal(run);
@@ -245,7 +337,8 @@ public class AgentRunService {
 
     @Transactional
     public AgentRun cancel(UserAccount user, UUID runId) {
-        AgentRun run = require(user, runId);
+        AgentRun run = runs.findLockedByIdAndRequestedById(runId, user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
         if (!run.getStatus().isTerminal()) {
             run.cancel();
             eventService.append(run, "run.cancelled", Map.of("status", run.getStatus().name()));
@@ -255,25 +348,72 @@ public class AgentRunService {
     }
 
     @Transactional
-    public AgentRun applyProposedChanges(UserAccount user, UUID runId, AgentServiceClient agentService) {
-        AgentRun run = require(user, runId);
-        if (run.getProject() == null || !"PROPOSED".equals(run.getChangeStatus())) {
+    public ChangeApplyClaim claimProposedChanges(UserAccount user, UUID runId) {
+        AgentRun run = runs.findLockedByIdAndRequestedById(runId, user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
+        if ("APPLIED".equals(run.getChangeStatus())) {
+            return ChangeApplyClaim.alreadyApplied(run.getId());
+        }
+        if ("APPLYING".equals(run.getChangeStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "CHANGES_ALREADY_APPLYING", "修改正在写入，请勿重复提交");
+        }
+        if (run.getProject() == null
+                || (!"PROPOSED".equals(run.getChangeStatus()) && !"APPLY_FAILED".equals(run.getChangeStatus()))) {
             throw new ApiException(HttpStatus.CONFLICT, "NO_PROPOSED_CHANGES", "该任务没有待确认修改");
         }
         List<Map<String, Object>> proposed = parseProposedChanges(run.getProposedChangesJson());
-        List<String> changedFiles = agentService.applyWorkspaceChanges(
+        run.markChangesApplying();
+        eventService.append(run, "run.changes.applying", Map.of("change_status", run.getChangeStatus()));
+        return new ChangeApplyClaim(
+                run.getId(),
                 run.getProject().getWorkspaceRoot(),
                 proposed,
-                run.getProject().getOwner().getId());
+                run.getProject().getOwner().getId(),
+                false);
+    }
+
+    @Transactional
+    public AgentRun completeProposedChanges(UUID runId, List<String> changedFiles) {
+        AgentRun run = runs.findLockedById(runId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
+        if ("APPLIED".equals(run.getChangeStatus())) {
+            return run;
+        }
         run.markChangesApplied(toJson(changedFiles));
         eventService.append(run, "run.changes.applied", Map.of("changed_files", changedFiles));
         return run;
     }
 
     @Transactional
+    public void failProposedChanges(UUID runId, String message) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
+        if (run == null || !"APPLYING".equals(run.getChangeStatus())) {
+            return;
+        }
+        String safeMessage = message == null || message.isBlank() ? "修改写入失败，请重试" : message;
+        run.markChangesApplyFailed(safeMessage);
+        eventService.append(run, "run.changes.apply_failed", Map.of("message", safeMessage));
+    }
+
+    @Transactional
+    public boolean expireStaleChangeApply(UUID runId, Instant cutoff) {
+        AgentRun run = runs.findLockedById(runId).orElse(null);
+        if (run == null
+                || !"APPLYING".equals(run.getChangeStatus())
+                || run.getChangeApplyStartedAt() == null
+                || !run.getChangeApplyStartedAt().isBefore(cutoff)) {
+            return false;
+        }
+        run.markChangesApplyFailed("修改写入进程已中断，请重新确认");
+        eventService.append(run, "run.changes.apply_failed", Map.of("message", run.getChangeErrorMessage()));
+        return true;
+    }
+
+    @Transactional
     public AgentRun rejectProposedChanges(UserAccount user, UUID runId) {
-        AgentRun run = require(user, runId);
-        if (!"PROPOSED".equals(run.getChangeStatus())) {
+        AgentRun run = runs.findLockedByIdAndRequestedById(runId, user.getId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
+        if (!"PROPOSED".equals(run.getChangeStatus()) && !"APPLY_FAILED".equals(run.getChangeStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "NO_PROPOSED_CHANGES", "该任务没有待确认修改");
         }
         run.rejectChanges();
@@ -283,9 +423,10 @@ public class AgentRunService {
 
     @Transactional
     public void recordAgentEvent(UUID runId, String eventType, Map<String, Object> payload) {
-        AgentRun run = runs.findById(runId)
+        AgentRun run = runs.findLockedById(runId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "RUN_NOT_FOUND", "运行任务不存在"));
         if (!run.getStatus().isTerminal()) {
+            run.heartbeat(Instant.now().plus(properties.getAgent().getRecoveryStaleAfter()));
             String normalized = eventType == null ? "agent.progress" : eventType.substring(0, Math.min(eventType.length(), 80));
             eventService.append(run, normalized, payload == null ? Map.of() : payload);
         }
@@ -362,5 +503,16 @@ public class AgentRunService {
             UUID requestedById,
             UUID workspaceOwnerId,
             String traceId) {
+    }
+
+    public record ChangeApplyClaim(
+            UUID runId,
+            String workspaceRoot,
+            List<Map<String, Object>> proposedChanges,
+            UUID workspaceOwnerId,
+            boolean alreadyApplied) {
+        private static ChangeApplyClaim alreadyApplied(UUID runId) {
+            return new ChangeApplyClaim(runId, null, List.of(), null, true);
+        }
     }
 }

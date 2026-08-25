@@ -168,8 +168,10 @@ export type AgentRun = {
     content: string;
     diff: string;
   }>;
-  change_status: "NONE" | "PROPOSED" | "APPLIED" | "REJECTED";
+  change_status: "NONE" | "PROPOSED" | "APPLYING" | "APPLIED" | "APPLY_FAILED" | "REJECTED";
   changes_applied_at: string | null;
+  change_apply_started_at: string | null;
+  change_error_message: string | null;
   error_code: string | null;
   error_message: string | null;
   created_at: string;

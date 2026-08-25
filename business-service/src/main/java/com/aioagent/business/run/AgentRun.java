@@ -93,6 +93,21 @@ public class AgentRun {
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
+    @Column(name = "dispatched_at")
+    private Instant dispatchedAt;
+
+    @Column(name = "dispatch_token", length = 100)
+    private String dispatchToken;
+
+    @Column(name = "heartbeat_at")
+    private Instant heartbeatAt;
+
+    @Column(name = "lease_expires_at")
+    private Instant leaseExpiresAt;
+
+    @Column(name = "worker_id", length = 100)
+    private String workerId;
+
     @Column(name = "changed_files_json", nullable = false, columnDefinition = "text")
     private String changedFilesJson;
 
@@ -104,6 +119,12 @@ public class AgentRun {
 
     @Column(name = "changes_applied_at")
     private Instant changesAppliedAt;
+
+    @Column(name = "change_apply_started_at")
+    private Instant changeApplyStartedAt;
+
+    @Column(name = "change_error_message", columnDefinition = "text")
+    private String changeErrorMessage;
 
     @Column(name = "error_code", length = 80)
     private String errorCode;
@@ -163,13 +184,25 @@ public class AgentRun {
         this.createdAt = Instant.now();
     }
 
-    public void markRunning() {
-        if (status != RunStatus.PENDING) {
+    public void markRunning(String dispatchToken, String workerId, Instant leaseExpiresAt) {
+        if (status != RunStatus.PENDING || !java.util.Objects.equals(this.dispatchToken, dispatchToken)) {
             throw new IllegalStateException("Only a pending run can start");
         }
+        Instant now = Instant.now();
         this.status = RunStatus.RUNNING;
-        this.startedAt = Instant.now();
+        this.startedAt = now;
+        this.heartbeatAt = now;
+        this.leaseExpiresAt = leaseExpiresAt;
+        this.workerId = workerId;
+        this.dispatchToken = null;
         this.attemptCount += 1;
+    }
+
+    public void heartbeat(Instant leaseExpiresAt) {
+        if (status == RunStatus.RUNNING) {
+            this.heartbeatAt = Instant.now();
+            this.leaseExpiresAt = leaseExpiresAt;
+        }
     }
 
     public void markSucceeded(
@@ -201,6 +234,7 @@ public class AgentRun {
         this.outputTokens = outputTokens;
         this.modelLatencyMs = modelLatencyMs;
         this.finishedAt = Instant.now();
+        clearLease();
     }
 
     public void markFailed(RunStatus failureStatus, String errorCode, String errorMessage) {
@@ -214,6 +248,7 @@ public class AgentRun {
         this.errorCode = errorCode;
         this.errorMessage = errorMessage;
         this.finishedAt = Instant.now();
+        clearLease();
     }
 
     public void cancel() {
@@ -223,6 +258,7 @@ public class AgentRun {
         this.cancelRequested = true;
         this.status = RunStatus.CANCELLED;
         this.finishedAt = Instant.now();
+        clearLease();
     }
 
     public UUID getId() {
@@ -309,6 +345,26 @@ public class AgentRun {
         return attemptCount;
     }
 
+    public Instant getDispatchedAt() {
+        return dispatchedAt;
+    }
+
+    public String getDispatchToken() {
+        return dispatchToken;
+    }
+
+    public Instant getHeartbeatAt() {
+        return heartbeatAt;
+    }
+
+    public Instant getLeaseExpiresAt() {
+        return leaseExpiresAt;
+    }
+
+    public String getWorkerId() {
+        return workerId;
+    }
+
     public String getChangedFilesJson() {
         return changedFilesJson;
     }
@@ -325,19 +381,49 @@ public class AgentRun {
         return changesAppliedAt;
     }
 
+    public Instant getChangeApplyStartedAt() {
+        return changeApplyStartedAt;
+    }
+
+    public String getChangeErrorMessage() {
+        return changeErrorMessage;
+    }
+
+    public void markChangesApplying() {
+        if (!"PROPOSED".equals(changeStatus) && !"APPLY_FAILED".equals(changeStatus)) {
+            throw new IllegalStateException("Run changes cannot be applied");
+        }
+        this.changeStatus = "APPLYING";
+        this.changeApplyStartedAt = Instant.now();
+        this.changeErrorMessage = null;
+    }
+
     public void markChangesApplied(String changedFilesJson) {
-        if (!"PROPOSED".equals(changeStatus)) {
-            throw new IllegalStateException("Run has no proposed changes");
+        if (!"APPLYING".equals(changeStatus)) {
+            throw new IllegalStateException("Run changes are not being applied");
         }
         this.changedFilesJson = changedFilesJson;
         this.changeStatus = "APPLIED";
         this.changesAppliedAt = Instant.now();
+        this.changeErrorMessage = null;
+    }
+
+    public void markChangesApplyFailed(String message) {
+        if ("APPLYING".equals(changeStatus)) {
+            this.changeStatus = "APPLY_FAILED";
+            this.changeErrorMessage = message;
+        }
     }
 
     public void rejectChanges() {
-        if ("PROPOSED".equals(changeStatus)) {
+        if ("PROPOSED".equals(changeStatus) || "APPLY_FAILED".equals(changeStatus)) {
             this.changeStatus = "REJECTED";
         }
+    }
+
+    private void clearLease() {
+        this.leaseExpiresAt = null;
+        this.dispatchToken = null;
     }
 
     public String getErrorCode() {

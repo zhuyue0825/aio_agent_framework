@@ -151,10 +151,14 @@ public class AgentServiceClient {
                 Map.of("root", root, "path", relativePath, "content", content, "owner_id", ownerId));
     }
 
-    public List<String> applyWorkspaceChanges(String root, List<Map<String, Object>> changes, UUID ownerId) {
+    public List<String> applyWorkspaceChanges(
+            String root,
+            List<Map<String, Object>> changes,
+            UUID ownerId,
+            UUID operationId) {
         Map<String, Object> response = postMap(
                 "/internal/v1/workspaces/changes/apply",
-                Map.of("root", root, "changes", changes, "owner_id", ownerId));
+                Map.of("root", root, "changes", changes, "owner_id", ownerId, "operation_id", operationId));
         Object raw = response.get("changed_files");
         if (!(raw instanceof List<?> values)) {
             return List.of();

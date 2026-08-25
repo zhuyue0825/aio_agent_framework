@@ -81,3 +81,17 @@ it("requires an explicit click before applying an Agent diff", async () => {
   await userEvent.click(screen.getByRole("button", { name: "确认写入" }));
   expect(apply).toHaveBeenCalledOnce();
 });
+
+it("prevents duplicate apply and reject clicks while a diff is being written", () => {
+  const run = {
+    id: "run-applying",
+    change_status: "APPLYING",
+    proposed_changes: [
+      { path: "src/app.ts", original_sha256: "a".repeat(64), content: "new", diff: "-old\n+new" },
+    ],
+  } as AgentRun;
+  render(<ChangeProposalPanel run={run} busy={false} onApply={() => undefined} onReject={() => undefined} />);
+
+  expect(screen.getByRole("button", { name: "正在写入" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "拒绝" })).toBeDisabled();
+});

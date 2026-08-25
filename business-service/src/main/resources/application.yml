@@ -18,6 +18,10 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+      jakarta:
+        persistence:
+          lock:
+            timeout: 5000
   flyway:
     enabled: true
   data:
@@ -39,6 +43,7 @@ app:
     run-stream: ${AIO_REDIS_RUN_STREAM:aio:agent-runs}
     run-group: ${AIO_REDIS_RUN_GROUP:aio-business}
     event-channel: ${AIO_REDIS_EVENT_CHANNEL:aio:run-events}
+    pending-reclaim-after: ${AIO_REDIS_PENDING_RECLAIM_AFTER:2m}
   security:
     jwt-secret: ${AIO_JWT_SECRET}
     token-ttl: ${AIO_TOKEN_TTL:15m}
@@ -58,7 +63,10 @@ app:
     connect-timeout: ${AGENT_CONNECT_TIMEOUT:3s}
     read-timeout: ${AGENT_READ_TIMEOUT:3m}
     recovery-stale-after: ${AGENT_RECOVERY_STALE_AFTER:4m}
+    heartbeat-interval: ${AGENT_HEARTBEAT_INTERVAL:30s}
     recovery-sweep-interval: ${AGENT_RECOVERY_SWEEP_INTERVAL:30s}
+    dispatch-lease: ${AGENT_DISPATCH_LEASE:5m}
+    change-apply-stale-after: ${AGENT_CHANGE_APPLY_STALE_AFTER:4m}
   bootstrap:
     admin-username: ${AIO_BOOTSTRAP_ADMIN_USERNAME:admin}
     admin-password: ${AIO_BOOTSTRAP_ADMIN_PASSWORD}

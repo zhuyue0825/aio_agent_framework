@@ -7,9 +7,13 @@ import com.aioagent.business.common.ApiException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.time.Instant;
+import java.sql.Timestamp;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ProjectService {
@@ -18,31 +22,64 @@ public class ProjectService {
     private final ProjectMemberRepository members;
     private final UserRepository users;
     private final AgentServiceClient agentService;
+    private final JdbcTemplate database;
+    private final TransactionTemplate transaction;
 
     public ProjectService(
             ProjectRepository projects,
             ProjectMemberRepository members,
             UserRepository users,
-            AgentServiceClient agentService) {
+            AgentServiceClient agentService,
+            JdbcTemplate database,
+            TransactionTemplate transaction) {
         this.projects = projects;
         this.members = members;
         this.users = users;
         this.agentService = agentService;
+        this.database = database;
+        this.transaction = transaction;
     }
 
-    @Transactional
     public OpenProjectResult open(UserAccount user, String requestedPath) {
         Map<String, Object> response = agentService.openWorkspace(requestedPath, user.getId());
         Map<String, Object> workspace = workspaceFrom(response);
         String root = requiredString(workspace, "root");
         String name = requiredString(workspace, "name");
-        Project project = projects.findByOwnerIdAndWorkspaceRoot(user.getId(), root)
-                .orElseGet(() -> {
-                    Project created = projects.save(new Project(user, name, root));
-                    members.save(new ProjectMember(created, user, ProjectMemberRole.OWNER));
-                    return created;
-                });
+        Project project = transaction.execute(status -> openTransactional(user, name, root));
+        if (project == null) {
+            throw new IllegalStateException("Project transaction returned no result");
+        }
         return new OpenProjectResult(project, workspace);
+    }
+
+    private Project openTransactional(UserAccount user, String name, String root) {
+        UUID candidateId = UUID.randomUUID();
+        Timestamp now = Timestamp.from(Instant.now());
+        database.update(
+                """
+                insert into projects(id, owner_id, name, workspace_root, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?)
+                on conflict (owner_id, workspace_root) do nothing
+                """,
+                candidateId,
+                user.getId(),
+                name,
+                root,
+                now,
+                now);
+        Project project = projects.findByOwnerIdAndWorkspaceRoot(user.getId(), root)
+                .orElseThrow(() -> new IllegalStateException("Project upsert did not create or find a row"));
+        database.update(
+                """
+                insert into project_members(id, project_id, user_id, member_role, created_at)
+                values (?, ?, ?, 'OWNER', ?)
+                on conflict (project_id, user_id) do nothing
+                """,
+                UUID.randomUUID(),
+                project.getId(),
+                user.getId(),
+                now);
+        return project;
     }
 
     @Transactional(readOnly = true)
@@ -66,8 +103,18 @@ public class ProjectService {
         Project project = requireOwner(projectId, actor);
         UserAccount target = users.findByUsernameIgnoreCase(username.trim())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "用户不存在"));
+        database.update(
+                """
+                insert into project_members(id, project_id, user_id, member_role, created_at)
+                values (?, ?, ?, 'MEMBER', ?)
+                on conflict (project_id, user_id) do nothing
+                """,
+                UUID.randomUUID(),
+                project.getId(),
+                target.getId(),
+                Timestamp.from(Instant.now()));
         return members.findByProjectIdAndUserId(projectId, target.getId())
-                .orElseGet(() -> members.save(new ProjectMember(project, target, ProjectMemberRole.MEMBER)));
+                .orElseThrow(() -> new IllegalStateException("Project member upsert did not create or find a row"));
     }
 
     @Transactional(readOnly = true)

@@ -16,11 +16,13 @@ public class SseRunEventHub {
 
     private static final long EMITTER_TIMEOUT_MILLIS = 30L * 60L * 1000L;
     private final RunEventRepository events;
+    private final AgentRunRepository runs;
     private final ObjectMapper mapper;
     private final ConcurrentHashMap<UUID, CopyOnWriteArrayList<Subscriber>> emitters = new ConcurrentHashMap<>();
 
-    public SseRunEventHub(RunEventRepository events, ObjectMapper mapper) {
+    public SseRunEventHub(RunEventRepository events, AgentRunRepository runs, ObjectMapper mapper) {
         this.events = events;
+        this.runs = runs;
         this.mapper = mapper;
     }
 
@@ -37,16 +39,39 @@ public class SseRunEventHub {
         emitter.onTimeout(() -> remove(runId, subscriber));
         emitter.onError(error -> remove(runId, subscriber));
 
-        List<RunEvent> history = events.findAllByRunIdAndIdGreaterThanOrderByIdAsc(
-                runId,
-                Math.max(0L, afterEventId),
-                PageRequest.of(0, 500));
         try {
-            for (RunEvent event : history) {
-                send(subscriber, event);
-            }
-            if (run.getStatus().isTerminal()) {
-                emitter.complete();
+            synchronized (subscriber) {
+                long cursor = Math.max(0L, afterEventId);
+                while (true) {
+                    List<RunEvent> history = events.findAllByRunIdAndIdGreaterThanOrderByIdAsc(
+                            runId,
+                            cursor,
+                            PageRequest.of(0, 500));
+                    for (RunEvent event : history) {
+                        send(subscriber, event);
+                    }
+                    if (!history.isEmpty()) {
+                        cursor = history.get(history.size() - 1).getId();
+                    }
+                    if (history.size() == 500) {
+                        continue;
+                    }
+                    boolean terminal = runs.findById(runId)
+                            .map(current -> current.getStatus().isTerminal())
+                            .orElse(true);
+                    if (!terminal) {
+                        break;
+                    }
+                    List<RunEvent> committedTail = events.findAllByRunIdAndIdGreaterThanOrderByIdAsc(
+                            runId,
+                            cursor,
+                            PageRequest.of(0, 500));
+                    if (!committedTail.isEmpty()) {
+                        continue;
+                    }
+                    emitter.complete();
+                    break;
+                }
             }
         } catch (IOException exception) {
             remove(runId, subscriber);
@@ -60,9 +85,11 @@ public class SseRunEventHub {
         List<Subscriber> current = emitters.getOrDefault(runId, new CopyOnWriteArrayList<>());
         for (Subscriber subscriber : current) {
             try {
-                send(subscriber, event);
-                if (isTerminal(event.getEventType())) {
-                    subscriber.emitter().complete();
+                synchronized (subscriber) {
+                    send(subscriber, event);
+                    if (isTerminal(event.getEventType())) {
+                        subscriber.emitter().complete();
+                    }
                 }
             } catch (IOException exception) {
                 remove(runId, subscriber);
