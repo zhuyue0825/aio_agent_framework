@@ -8,6 +8,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -44,6 +46,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<Map<String, Object>> handleConflict(DataIntegrityViolationException exception) {
         return response(HttpStatus.CONFLICT, "CONFLICT", "资源状态冲突，请刷新后重试", List.of());
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ResponseEntity<Map<String, Object>> handleOptimisticConflict(OptimisticLockingFailureException exception) {
+        return response(HttpStatus.CONFLICT, "CONCURRENT_MODIFICATION", "资源已被其他请求更新，请刷新后重试", List.of());
+    }
+
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    ResponseEntity<Map<String, Object>> handleLockConflict(RuntimeException exception) {
+        return response(HttpStatus.CONFLICT, "RESOURCE_BUSY", "资源正在被处理，请稍后重试", List.of());
     }
 
     @ExceptionHandler(AccessDeniedException.class)

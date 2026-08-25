@@ -141,6 +141,9 @@ public class AppProperties {
         private Duration connectTimeout = Duration.ofSeconds(3);
         private Duration readTimeout = Duration.ofMinutes(3);
         private Duration recoveryStaleAfter = Duration.ofMinutes(4);
+        private Duration heartbeatInterval = Duration.ofSeconds(30);
+        private Duration dispatchLease = Duration.ofMinutes(5);
+        private Duration changeApplyStaleAfter = Duration.ofMinutes(4);
 
         public String getBaseUrl() {
             return baseUrl;
@@ -188,6 +191,30 @@ public class AppProperties {
 
         public void setRecoveryStaleAfter(Duration recoveryStaleAfter) {
             this.recoveryStaleAfter = recoveryStaleAfter;
+        }
+
+        public Duration getHeartbeatInterval() {
+            return heartbeatInterval;
+        }
+
+        public void setHeartbeatInterval(Duration heartbeatInterval) {
+            this.heartbeatInterval = heartbeatInterval;
+        }
+
+        public Duration getDispatchLease() {
+            return dispatchLease;
+        }
+
+        public void setDispatchLease(Duration dispatchLease) {
+            this.dispatchLease = dispatchLease;
+        }
+
+        public Duration getChangeApplyStaleAfter() {
+            return changeApplyStaleAfter;
+        }
+
+        public void setChangeApplyStaleAfter(Duration changeApplyStaleAfter) {
+            this.changeApplyStaleAfter = changeApplyStaleAfter;
         }
     }
 
@@ -248,6 +275,7 @@ public class AppProperties {
         private String runStream = "aio:agent-runs";
         private String runGroup = "aio-business";
         private String eventChannel = "aio:run-events";
+        private Duration pendingReclaimAfter = Duration.ofMinutes(2);
 
         public boolean isEnabled() {
             return enabled;
@@ -287,6 +315,14 @@ public class AppProperties {
 
         public void setEventChannel(String eventChannel) {
             this.eventChannel = eventChannel;
+        }
+
+        public Duration getPendingReclaimAfter() {
+            return pendingReclaimAfter;
+        }
+
+        public void setPendingReclaimAfter(Duration pendingReclaimAfter) {
+            this.pendingReclaimAfter = pendingReclaimAfter;
         }
     }
 }

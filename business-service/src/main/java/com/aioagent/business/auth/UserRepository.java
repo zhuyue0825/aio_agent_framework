@@ -11,6 +11,10 @@ import org.springframework.data.repository.query.Param;
 public interface UserRepository extends JpaRepository<UserAccount, UUID> {
     Optional<UserAccount> findByUsernameIgnoreCase(String username);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select user from UserAccount user where lower(user.username) = lower(:username)")
+    Optional<UserAccount> findLockedByUsernameIgnoreCase(@Param("username") String username);
+
     boolean existsByUsernameIgnoreCase(String username);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

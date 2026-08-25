@@ -294,6 +294,7 @@ def write_workspace_file(root: Path, relative_path: str, content: str) -> dict[s
 
 def apply_workspace_changes(root: Path, changes: list[dict[str, str]]) -> list[str]:
     validated: list[tuple[Path, str, str]] = []
+    completed: list[str] = []
     for change in changes:
         relative_path = str(change.get("path") or "")
         expected_hash = str(change.get("original_sha256") or "")
@@ -302,11 +303,17 @@ def apply_workspace_changes(root: Path, changes: list[dict[str, str]]) -> list[s
             raise WorkspaceError("修改提案缺少有效的原文件哈希")
         path = resolve_workspace_path(root, relative_path, must_exist=False)
         original = path.read_bytes() if path.exists() and path.is_file() else b""
-        if hashlib.sha256(original).hexdigest() != expected_hash:
+        current_hash = hashlib.sha256(original).hexdigest()
+        desired_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        normalized = relative_workspace_path(root, path)
+        if current_hash == desired_hash:
+            completed.append(normalized)
+            continue
+        if current_hash != expected_hash:
             raise WorkspaceError(f"文件已在提案生成后发生变化: {relative_path}")
         if len(content.encode("utf-8")) > MAX_FILE_BYTES:
             raise WorkspaceError(f"文件超过 Agent 修改上限: {relative_path}")
-        validated.append((path, content, relative_workspace_path(root, path)))
+        validated.append((path, content, normalized))
 
     temporary_files: list[tuple[Path, Path]] = []
     try:
@@ -321,7 +328,7 @@ def apply_workspace_changes(root: Path, changes: list[dict[str, str]]) -> list[s
             temporary_files.append((temporary, path))
         for temporary, path in temporary_files:
             os.replace(temporary, path)
-        return [relative for _, _, relative in validated]
+        return completed + [relative for _, _, relative in validated]
     finally:
         for temporary, _ in temporary_files:
             temporary.unlink(missing_ok=True)

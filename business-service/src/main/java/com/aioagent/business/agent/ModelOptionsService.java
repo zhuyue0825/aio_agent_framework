@@ -43,15 +43,21 @@ public class ModelOptionsService {
         if (provider != ConversationModelProvider.REMOTE) {
             return;
         }
-        requireRemoteConfigured();
+        requireConfigured(provider);
         quotas.requireAvailable(user.getId());
     }
 
-    public void reserveRun(UserAccount user, ConversationModelProvider provider) {
+    public void requireConfigured(ConversationModelProvider provider) {
         if (provider != ConversationModelProvider.REMOTE) {
             return;
         }
         requireRemoteConfigured();
+    }
+
+    public void consumeRun(UserAccount user, ConversationModelProvider provider) {
+        if (provider != ConversationModelProvider.REMOTE) {
+            return;
+        }
         quotas.consume(user.getId());
     }
 

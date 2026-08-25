@@ -43,15 +43,14 @@ public class BootstrapAdmin implements ApplicationRunner {
             throw new IllegalStateException("AIO_BOOTSTRAP_ADMIN_PASSWORD must contain at least 12 characters");
         }
 
-        UserAccount existing = users.findByUsernameIgnoreCase(username).orElse(null);
+        UserAccount existing = users.findLockedByUsernameIgnoreCase(username).orElse(null);
         if (existing != null) {
             if (existing.getRole() != UserRole.ADMIN) {
                 throw new IllegalStateException("Bootstrap administrator username belongs to a non-admin user");
             }
             if (!passwordEncoder.matches(password, existing.getPasswordHash())) {
                 existing.changePasswordHash(passwordEncoder.encode(password));
-                refreshTokens.findAllByUserId(existing.getId()).forEach(RefreshToken::revoke);
-                users.save(existing);
+                refreshTokens.revokeAllActiveByUserId(existing.getId(), java.time.Instant.now());
                 log.info("Rotated bootstrap admin password for '{}'", username);
             }
             return;

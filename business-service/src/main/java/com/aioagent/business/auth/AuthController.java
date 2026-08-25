@@ -98,7 +98,7 @@ public class AuthController {
             @Valid @RequestBody ChangePasswordRequest request,
             Authentication authentication) {
         authService.changePassword(
-                currentUser.require(authentication),
+                currentUser.require(authentication).getId(),
                 request.currentPassword(),
                 request.newPassword());
         return Map.of("ok", true);

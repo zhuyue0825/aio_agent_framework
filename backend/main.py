@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
+import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -210,6 +212,7 @@ class WorkspaceChangesApplyRequest(BaseModel):
     root: str = Field(min_length=1)
     changes: list[ProposedWorkspaceChange] = Field(min_length=1, max_length=100)
     owner_id: UUID | None = None
+    operation_id: UUID | None = None
 
 
 class ModelSettingsUpdateRequest(BaseModel):
@@ -307,6 +310,58 @@ class CancellationRegistry:
 
 cancellations = CancellationRegistry()
 redis_cancellations = RedisCancellationBridge(cancellations.cancel)
+
+
+class WorkspaceApplyRegistry:
+    """Deduplicates concurrent workspace writes by the business run id."""
+
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._results: dict[UUID, tuple[str, list[str]]] = {}
+        self._inflight: dict[UUID, tuple[str, Event]] = {}
+
+    def execute(self, operation_id: UUID, fingerprint: str, apply: Callable[[], list[str]]) -> list[str]:
+        leader = False
+        with self._lock:
+            completed = self._results.get(operation_id)
+            if completed is not None:
+                if completed[0] != fingerprint:
+                    raise WorkspaceError("相同操作编号对应了不同的修改内容")
+                return list(completed[1])
+            active = self._inflight.get(operation_id)
+            if active is None:
+                event = Event()
+                self._inflight[operation_id] = (fingerprint, event)
+                leader = True
+            else:
+                if active[0] != fingerprint:
+                    raise WorkspaceError("相同操作编号对应了不同的修改内容")
+                event = active[1]
+
+        if not leader:
+            if not event.wait(timeout=180):
+                raise WorkspaceError("修改仍在处理中，请稍后重试")
+            with self._lock:
+                completed = self._results.get(operation_id)
+                if completed is None:
+                    raise WorkspaceError("上一次修改写入失败，请重试")
+                return list(completed[1])
+
+        try:
+            result = apply()
+            with self._lock:
+                self._results[operation_id] = (fingerprint, list(result))
+                if len(self._results) > 10_000:
+                    self._results.pop(next(iter(self._results)))
+            return result
+        finally:
+            with self._lock:
+                active = self._inflight.pop(operation_id, None)
+                if active is not None:
+                    active[1].set()
+
+
+workspace_apply_registry = WorkspaceApplyRegistry()
 
 
 class ProgressReporter:
@@ -754,10 +809,23 @@ def save_workspace_file(payload: WorkspaceFileWriteRequest) -> dict[str, Any]:
 def apply_proposed_workspace_changes(payload: WorkspaceChangesApplyRequest) -> dict[str, Any]:
     try:
         workspace_root = normalize_workspace_root(payload.root, str(payload.owner_id) if payload.owner_id else None)
-        changed = apply_workspace_changes(
-            workspace_root,
-            [change.model_dump() for change in payload.changes],
-        )
-        return {"ok": True, "changed_files": changed}
+        changes = [change.model_dump() for change in payload.changes]
+        apply = lambda: apply_workspace_changes(workspace_root, changes)
+        if payload.operation_id is None:
+            changed = apply()
+        else:
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {
+                        "root": str(workspace_root),
+                        "owner_id": str(payload.owner_id) if payload.owner_id else None,
+                        "changes": changes,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            changed = workspace_apply_registry.execute(payload.operation_id, fingerprint, apply)
+        return {"ok": True, "changed_files": changed, "operation_id": payload.operation_id}
     except WorkspaceError as exc:
         raise HTTPException(status_code=409, detail={"code": "WORKSPACE_CHANGED", "message": str(exc)}) from exc

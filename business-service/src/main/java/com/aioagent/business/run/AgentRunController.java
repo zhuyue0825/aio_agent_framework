@@ -40,6 +40,7 @@ public class AgentRunController {
     private final AgentRunService runs;
     private final AgentRunRecovery recovery;
     private final AgentServiceClient agentService;
+    private final WorkspaceChangeService workspaceChanges;
     private final AgentCancellationPublisher cancellationPublisher;
     private final SseRunEventHub eventHub;
     private final ObjectMapper mapper;
@@ -49,6 +50,7 @@ public class AgentRunController {
             AgentRunService runs,
             AgentRunRecovery recovery,
             AgentServiceClient agentService,
+            WorkspaceChangeService workspaceChanges,
             AgentCancellationPublisher cancellationPublisher,
             SseRunEventHub eventHub,
             ObjectMapper mapper) {
@@ -56,6 +58,7 @@ public class AgentRunController {
         this.runs = runs;
         this.recovery = recovery;
         this.agentService = agentService;
+        this.workspaceChanges = workspaceChanges;
         this.cancellationPublisher = cancellationPublisher;
         this.eventHub = eventHub;
         this.mapper = mapper;
@@ -116,7 +119,7 @@ public class AgentRunController {
     public Map<String, RunDtos.RunResponse> applyChanges(
             @PathVariable UUID runId,
             Authentication authentication) {
-        AgentRun run = runs.applyProposedChanges(currentUser.require(authentication), runId, agentService);
+        AgentRun run = workspaceChanges.apply(currentUser.require(authentication), runId);
         return Map.of("run", RunDtos.RunResponse.from(run, mapper));
     }
 

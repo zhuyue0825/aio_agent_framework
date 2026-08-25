@@ -18,7 +18,7 @@ public class LocalAgentRunDispatcher implements AgentRunDispatcher {
     }
 
     @Override
-    public void dispatch(UUID runId) {
-        taskExecutor.execute(() -> runner.execute(runId));
+    public void dispatch(UUID runId, String dispatchToken) {
+        taskExecutor.execute(() -> runner.execute(runId, dispatchToken));
     }
 }

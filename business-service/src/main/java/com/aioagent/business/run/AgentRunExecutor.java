@@ -2,11 +2,14 @@ package com.aioagent.business.run;
 
 import com.aioagent.business.agent.AgentServiceClient;
 import com.aioagent.business.agent.AgentServiceException;
+import com.aioagent.business.config.AppProperties;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -15,18 +18,28 @@ public class AgentRunExecutor {
     private static final Logger log = LoggerFactory.getLogger(AgentRunExecutor.class);
     private final AgentRunService runs;
     private final AgentServiceClient agentService;
+    private final TaskScheduler scheduler;
+    private final AppProperties properties;
+    private final String workerId = UUID.randomUUID().toString();
 
-    public AgentRunExecutor(AgentRunService runs, AgentServiceClient agentService) {
+    public AgentRunExecutor(
+            AgentRunService runs,
+            AgentServiceClient agentService,
+            TaskScheduler scheduler,
+            AppProperties properties) {
         this.runs = runs;
         this.agentService = agentService;
+        this.scheduler = scheduler;
+        this.properties = properties;
     }
 
-    public void execute(UUID runId) {
-        Optional<AgentRunService.PreparedExecution> optional = runs.prepare(runId);
+    public void execute(UUID runId, String dispatchToken) {
+        Optional<AgentRunService.PreparedExecution> optional = runs.prepare(runId, dispatchToken, workerId);
         if (optional.isEmpty()) {
             return;
         }
         AgentRunService.PreparedExecution prepared = optional.get();
+        ScheduledFuture<?> heartbeat = startHeartbeat(runId);
         MDC.put("trace_id", prepared.traceId());
         try {
             AgentServiceClient.ExecutionRequest request = new AgentServiceClient.ExecutionRequest(
@@ -65,7 +78,29 @@ public class AgentRunExecutor {
             log.error("Unexpected agent run failure", exception);
             runs.fail(runId, RunStatus.FAILED, "RUN_EXECUTION_ERROR", "Agent 任务执行失败，请稍后重试");
         } finally {
+            if (heartbeat != null) {
+                heartbeat.cancel(false);
+            }
             MDC.remove("trace_id");
+        }
+    }
+
+    private ScheduledFuture<?> startHeartbeat(UUID runId) {
+        try {
+            return scheduler.scheduleAtFixedRate(
+                    () -> renewLease(runId),
+                    properties.getAgent().getHeartbeatInterval());
+        } catch (RuntimeException exception) {
+            log.atWarn().addKeyValue("run_id", runId).log("agent_run_heartbeat_start_failed", exception);
+            return null;
+        }
+    }
+
+    private void renewLease(UUID runId) {
+        try {
+            runs.heartbeat(runId, workerId);
+        } catch (RuntimeException exception) {
+            log.atWarn().addKeyValue("run_id", runId).log("agent_run_heartbeat_failed", exception);
         }
     }
 

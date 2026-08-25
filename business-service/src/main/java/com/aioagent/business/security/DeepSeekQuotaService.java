@@ -49,24 +49,28 @@ public class DeepSeekQuotaService {
     }
 
     public void consume(UUID userId) {
-        Snapshot quota = snapshot(userId);
-        if (quota.limit() <= 0) {
+        int limit = Math.max(0, properties.getSecurity().getDeepseekRunsPerDay());
+        if (limit <= 0) {
             return;
-        }
-        if (quota.remaining() == null || quota.remaining() <= 0) {
-            throw exhausted();
         }
         ZoneId zone = ZoneId.of(properties.getSecurity().getQuotaTimeZone());
         LocalDate quotaDate = ZonedDateTime.now(zone).toLocalDate();
-        database.update(
+        Long used = database.query(
                 """
                 insert into model_daily_quotas(user_id, provider, quota_date, used, updated_at)
                 values (?, 'remote', ?, 1, now())
                 on conflict (user_id, provider, quota_date)
                 do update set used = model_daily_quotas.used + 1, updated_at = now()
+                where model_daily_quotas.used < ?
+                returning used
                 """,
+                result -> result.next() ? result.getLong("used") : null,
                 userId,
-                java.sql.Date.valueOf(quotaDate));
+                java.sql.Date.valueOf(quotaDate),
+                limit);
+        if (used == null) {
+            throw exhausted();
+        }
     }
 
     private ApiException exhausted() {

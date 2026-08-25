@@ -161,6 +161,8 @@ def test_agent_changes_are_staged_until_hash_checked_confirmation(tmp_path: Path
     proposals = tools.proposals()
     assert apply_workspace_changes(tmp_path, proposals) == ["app.py"]
     assert target.read_text(encoding="utf-8") == "print('new')\n"
+    assert apply_workspace_changes(tmp_path, proposals) == ["app.py"]
+    assert target.read_text(encoding="utf-8") == "print('new')\n"
 
 
 def test_staged_change_refuses_to_overwrite_a_newer_file(tmp_path: Path) -> None:
