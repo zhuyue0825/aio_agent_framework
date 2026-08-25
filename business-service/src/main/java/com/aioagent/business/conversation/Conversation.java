@@ -44,6 +44,9 @@ public class Conversation {
     @Column(name = "model_provider", nullable = false, length = 20)
     private ConversationModelProvider modelProvider;
 
+    @Column(name = "model_id", nullable = false, length = 200)
+    private String modelId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -63,11 +66,28 @@ public class Conversation {
             String title,
             ConversationMode mode,
             ConversationModelProvider modelProvider) {
+        this(
+                owner,
+                project,
+                title,
+                mode,
+                modelProvider,
+                modelProvider.defaultModelId());
+    }
+
+    public Conversation(
+            UserAccount owner,
+            Project project,
+            String title,
+            ConversationMode mode,
+            ConversationModelProvider modelProvider,
+            String modelId) {
         this.owner = owner;
         this.project = project;
         this.title = title;
         this.mode = mode;
         this.modelProvider = modelProvider;
+        this.modelId = modelId;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
     }
@@ -83,8 +103,9 @@ public class Conversation {
         touch();
     }
 
-    public void selectModel(ConversationModelProvider modelProvider) {
+    public void selectModel(ConversationModelProvider modelProvider, String modelId) {
         this.modelProvider = modelProvider;
+        this.modelId = modelId;
         touch();
     }
 
@@ -114,6 +135,10 @@ public class Conversation {
 
     public ConversationModelProvider getModelProvider() {
         return modelProvider;
+    }
+
+    public String getModelId() {
+        return modelId;
     }
 
     public Instant getCreatedAt() {

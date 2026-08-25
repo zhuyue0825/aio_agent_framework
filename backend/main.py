@@ -31,6 +31,7 @@ from .logging_config import (
     current_trace_id,
     normalize_trace_id,
 )
+from .model_registry import ModelNotFoundError, ModelRegistry, ModelUnavailableError
 from .model_settings import ModelSettingsStore
 from .redis_cancellation import RedisCancellationBridge
 from .workspace import (
@@ -50,6 +51,7 @@ logger = logging.getLogger("aio_agent.execution_service")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRACE_PATH = PROJECT_ROOT / "traces" / "app.jsonl"
 model_settings = ModelSettingsStore.from_env(PROJECT_ROOT)
+model_registry = ModelRegistry.from_env(PROJECT_ROOT, model_settings)
 
 
 def required_internal_token() -> str:
@@ -179,6 +181,7 @@ class AgentRunRequest(BaseModel):
     task: str = Field(min_length=1, max_length=100_000)
     mode: Literal["chat", "project"] = "chat"
     model_provider: Literal["local", "remote"] = "local"
+    model_id: str | None = Field(default=None, min_length=3, max_length=200, pattern=r"^[a-z0-9][a-z0-9:._/-]+$")
     history: list[HistoryMessage] = Field(default_factory=list, max_length=30)
     workspace_root: str | None = None
     approval_mode: str = "auto"
@@ -444,10 +447,11 @@ def run_plain_chat(
     should_cancel: Any,
     register_abort: Any,
     on_event: Any,
+    model_id: str | None = None,
 ) -> dict[str, Any]:
     should_raise_cancelled(should_cancel)
     on_event("agent.step.started", {"step": 1})
-    active_config = model_settings.config_for(model_provider)
+    active_config = model_registry.config_for(model_id, model_provider)
     model = OpenAICompatibleModel(active_config)
     trimmed_history = trim_history_to_token_budget(history, active_config.history_token_budget)
     messages: list[dict[str, str]] = [
@@ -458,7 +462,6 @@ def run_plain_chat(
         completion = model.complete(
             messages,
             tools=[],
-            max_tokens=512,
             temperature=0.05,
             top_p=0.7,
             should_cancel=should_cancel,
@@ -556,7 +559,7 @@ def run_project_agent(
     )
     tools, tool_session = build_workspace_tools(root)
     tool_names = [spec["function"]["name"] for spec in tools.specs()]
-    active_config = model_settings.config_for(request.model_provider)
+    active_config = model_registry.config_for(request.model_id, request.model_provider)
     runtime = AgentRuntime(
         config=replace(active_config, max_steps=request.max_steps),
         tools=tools,
@@ -621,10 +624,15 @@ def get_model_settings() -> dict[str, Any]:
     return model_settings.public_view()
 
 
+@app.get("/internal/v1/models")
+def get_registered_models(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    return model_registry.public_view(refresh=refresh)
+
+
 @app.put("/internal/v1/model-settings")
 def update_model_settings(payload: ModelSettingsUpdateRequest) -> dict[str, Any]:
     try:
-        return model_settings.update(
+        result = model_settings.update(
             active_provider=payload.active_provider,
             remote_api_base=payload.remote_api_base,
             remote_model_name=payload.remote_model_name,
@@ -632,6 +640,8 @@ def update_model_settings(payload: ModelSettingsUpdateRequest) -> dict[str, Any]
             local_api_base=payload.local_api_base,
             local_model_name=payload.local_model_name,
         )
+        model_registry.invalidate()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "INVALID_MODEL_SETTINGS", "message": str(exc)}) from exc
 
@@ -691,6 +701,7 @@ def execute_agent_run(
                 should_cancel,
                 cancellation.register_abort,
                 reporter.emit,
+                request.model_id,
             )
         reporter.emit("agent.response.ready", {"steps": result["steps"]})
         logger.info(
@@ -718,6 +729,18 @@ def execute_agent_run(
         raise HTTPException(
             status_code=400,
             detail={"code": "WORKSPACE_ERROR", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    except ModelNotFoundError as exc:
+        reporter.emit("agent.failed", {"code": "MODEL_NOT_FOUND"})
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "MODEL_NOT_FOUND", "message": str(exc), "trace_id": trace_id},
+        ) from exc
+    except ModelUnavailableError as exc:
+        reporter.emit("agent.failed", {"code": "MODEL_UNAVAILABLE"})
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "MODEL_UNAVAILABLE", "message": str(exc), "trace_id": trace_id},
         ) from exc
     except ModelApiError as exc:
         reporter.emit("agent.failed", {"code": exc.code})

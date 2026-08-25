@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "local:minimind-64m",
+      "provider": "local",
+      "profile": "local",
+      "display_name": "MiniMind 64M",
+      "architecture": "MiniMindForCausalLM (768 x 8)",
+      "required_files": ["full_sft_768.pth"],
+      "probe": true,
+      "health_path": "/docs"
+    },
+    {
+      "id": "local:minimind-94m",
+      "provider": "local",
+      "display_name": "MiniMind 94M",
+      "model_name": "minimind-94m",
+      "architecture": "MiniMindForCausalLM (768 x 12)",
+      "api_base_env": "MINIMIND_94M_API_BASE",
+      "api_base": "http://minimind-94m:8998/v1",
+      "required_files": ["autodl-93m/full_sft_12l_768.pth"],
+      "probe": true,
+      "health_path": "/docs"
+    }
+  ]
+}

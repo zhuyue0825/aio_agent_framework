@@ -23,6 +23,7 @@ export type Conversation = {
   title: string;
   mode: AppMode;
   model_provider: ModelProvider;
+  model_id: string;
   project_id: string | null;
   created_at: string;
   updated_at: string;
@@ -82,11 +83,15 @@ export type ModelConnectionTest = {
 };
 
 export type ModelOption = {
+  id: string;
   provider: ModelProvider;
   display_name: string;
   model_name: string;
+  source: "configured" | "manifest" | "runtime" | "scan" | string;
   available: boolean;
+  installed: boolean;
   unavailable_reason: string | null;
+  architecture: string | null;
 };
 
 export type ModelOptions = {
@@ -155,6 +160,7 @@ export type AgentRun = {
   final_answer: string | null;
   steps: number | null;
   model_provider: string | null;
+  model_id: string;
   model_name: string | null;
   model_request_count: number;
   input_tokens: number | null;
@@ -400,15 +406,15 @@ export const api = {
   modelOptions: () => request<ModelOptions>("/api/v1/model-options"),
   listConversations: (page = 0, size = 50) =>
     request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
-  createConversation: (title = "新对话", modelProvider: ModelProvider = "local") =>
+  createConversation: (title = "新对话", modelId = "local:minimind-64m") =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {
       method: "POST",
-      body: JSON.stringify({ title, mode: "chat", model_provider: modelProvider }),
+      body: JSON.stringify({ title, mode: "chat", model_id: modelId }),
     }),
-  updateConversationModel: (id: string, modelProvider: ModelProvider) =>
+  updateConversationModel: (id: string, modelId: string) =>
     request<{ conversation: Conversation }>(`/api/v1/conversations/${id}/model`, {
       method: "PUT",
-      body: JSON.stringify({ model_provider: modelProvider }),
+      body: JSON.stringify({ model_id: modelId }),
     }),
   deleteConversation: (id: string) =>
     request<{ ok: true }>(`/api/v1/conversations/${id}`, { method: "DELETE" }),

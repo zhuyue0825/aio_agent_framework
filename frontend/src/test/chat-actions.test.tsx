@@ -18,18 +18,26 @@ const status: Status = {
 const modelOptions: ModelOptions = {
   models: [
     {
+      id: "local:minimind-64m",
       provider: "local",
-      display_name: "MiniMind",
+      display_name: "MiniMind 64M",
       model_name: "minimind",
+      source: "manifest",
       available: true,
+      installed: true,
       unavailable_reason: null,
+      architecture: "MiniMindForCausalLM (768 x 8)",
     },
     {
+      id: "remote:deepseek",
       provider: "remote",
       display_name: "DeepSeek",
       model_name: "deepseek-chat",
+      source: "configured",
       available: true,
+      installed: true,
       unavailable_reason: null,
+      architecture: null,
     },
   ],
   deepseek_quota: {
@@ -48,7 +56,7 @@ it("sends a chat message and exposes cancellation for an active run", async () =
   const baseProps = {
     status,
     modelOptions,
-    modelProvider: "local" as const,
+    modelId: "local:minimind-64m",
     hasConversation: true,
     mode: "chat" as const,
     workspace: null,
@@ -83,7 +91,7 @@ it("lets a regular user choose DeepSeek for the current conversation without exp
     <Chat
       status={status}
       modelOptions={modelOptions}
-      modelProvider="local"
+      modelId="local:minimind-64m"
       hasConversation
       mode="chat"
       workspace={null}
@@ -103,8 +111,8 @@ it("lets a regular user choose DeepSeek for the current conversation without exp
     />,
   );
 
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "当前对话模型" }), "remote");
-  expect(changeModel).toHaveBeenCalledWith("remote");
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "当前对话模型" }), "remote:deepseek");
+  expect(changeModel).toHaveBeenCalledWith("remote:deepseek");
   expect(screen.queryByRole("button", { name: "管理员模型配置" })).not.toBeInTheDocument();
   expect(screen.queryByText(/API Key/)).not.toBeInTheDocument();
 });

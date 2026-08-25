@@ -75,6 +75,9 @@ public class AgentRun {
     @Column(name = "model_provider", nullable = false, length = 20)
     private String modelProvider;
 
+    @Column(name = "model_id", nullable = false, length = 200)
+    private String modelId;
+
     @Column(name = "model_name", length = 200)
     private String modelName;
 
@@ -159,6 +162,7 @@ public class AgentRun {
             String task,
             ConversationMode mode,
             String modelProvider,
+            String modelId,
             String approvalMode,
             int maxHistoryMessages,
             String idempotencyKey,
@@ -171,6 +175,7 @@ public class AgentRun {
         this.task = task;
         this.mode = mode;
         this.modelProvider = modelProvider;
+        this.modelId = modelId;
         this.approvalMode = approvalMode;
         this.maxHistoryMessages = maxHistoryMessages;
         this.idempotencyKey = idempotencyKey;
@@ -319,6 +324,10 @@ public class AgentRun {
 
     public String getModelProvider() {
         return modelProvider;
+    }
+
+    public String getModelId() {
+        return modelId;
     }
 
     public String getModelName() {

@@ -14,6 +14,7 @@ test("login, create a chat run, observe progress, and cancel", async ({ page }) 
     final_answer: null,
     steps: null,
     model_provider: null,
+    model_id: "local:minimind-64m",
     model_name: null,
     model_request_count: 0,
     input_tokens: null,
@@ -35,6 +36,7 @@ test("login, create a chat run, observe progress, and cancel", async ({ page }) 
     title: "新对话",
     mode: "chat",
     model_provider: "local",
+    model_id: "local:minimind-64m",
     project_id: null,
     created_at: now,
     updated_at: now,
@@ -75,8 +77,24 @@ test("login, create a chat run, observe progress, and cancel", async ({ page }) 
       return route.fulfill({
         json: {
           models: [
-            { provider: "local", display_name: "MiniMind", model_name: "minimind", available: true },
-            { provider: "remote", display_name: "DeepSeek", model_name: "deepseek-chat", available: true },
+            {
+              id: "local:minimind-64m",
+              provider: "local",
+              display_name: "MiniMind 64M",
+              model_name: "minimind",
+              source: "manifest",
+              available: true,
+              installed: true,
+            },
+            {
+              id: "remote:deepseek",
+              provider: "remote",
+              display_name: "DeepSeek",
+              model_name: "deepseek-chat",
+              source: "configured",
+              available: true,
+              installed: true,
+            },
           ],
           deepseek_quota: {
             limit: 20,

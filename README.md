@@ -246,7 +246,8 @@ http://127.0.0.1:5173
 - Java 通过 Redis Stream 分发任务，并提供并发保护、幂等键、重启恢复、超时、跨实例取消/SSE、Trace ID 和 Prometheus 指标。
 - FastAPI 只提供带内部令牌的 Agent/工作区接口。
 - 模型 Key 只保存在后端环境变量或本机配置文件中，不进入前端存储，也不会由设置接口回显。
-- 每个用户可为每个对话选择 MiniMind 或管理员已配置的 DeepSeek；API Key 仍只保存在服务端且不会由接口回显。DeepSeek 默认按用户限制为每天 20 个运行，可通过环境变量调整。
+- 每个用户可为每个对话选择具体的已注册模型；服务会扫描 MiniMind、标准 Hugging Face/GGUF 权重目录，并发现兼容 `/v1/models` 的本地推理服务。完整说明见 [`docs/local-model-registry.md`](docs/local-model-registry.md)。
+- API Key 仍只保存在服务端且不会由接口回显。DeepSeek 默认按用户限制为每天 20 个运行，可通过环境变量调整。
 - 公网部署使用生产 Nginx/HTTPS 入口，仅发布 `443`；详见 `DEPLOYMENT.md`。
 - 公开注册默认关闭，Python 服务以非 root 用户运行且只能访问配置的工作区根目录。
 - 全服务 healthcheck、自动重启和日志轮转，PostgreSQL 定时备份，以及应用服务结构化日志和跨服务 `trace_id`。

@@ -47,6 +47,7 @@ public class AgentRunExecutor {
                     prepared.task(),
                     prepared.mode().name().toLowerCase(),
                     prepared.modelProvider(),
+                    prepared.modelId(),
                     prepared.history(),
                     prepared.workspaceRoot(),
                     prepared.approvalMode(),

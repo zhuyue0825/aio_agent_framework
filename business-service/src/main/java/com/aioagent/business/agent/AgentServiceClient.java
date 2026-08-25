@@ -87,6 +87,14 @@ public class AgentServiceClient {
         }
     }
 
+    public Map<String, Object> registeredModels() {
+        try {
+            return client.get().uri("/internal/v1/models").retrieve().body(MAP_TYPE);
+        } catch (RestClientException exception) {
+            throw wrap("Model registry request failed", exception);
+        }
+    }
+
     public Map<String, Object> updateModelSettings(Map<String, Object> settings) {
         try {
             return client.put()
@@ -263,6 +271,7 @@ public class AgentServiceClient {
             String task,
             String mode,
             String modelProvider,
+            String modelId,
             List<HistoryMessage> history,
             String workspaceRoot,
             String approvalMode,

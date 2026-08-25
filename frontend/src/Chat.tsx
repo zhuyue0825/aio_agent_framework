@@ -1,11 +1,11 @@
 import { Cloud, Cpu, FolderCode, FolderOpen, LogOut, MessageSquare, Send, Settings, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AppMode, Message, ModelOptions, ModelProvider, Status, Workspace } from "./api";
+import type { AppMode, Message, ModelOptions, Status, Workspace } from "./api";
 
 type ChatProps = {
   status: Status | null;
   modelOptions: ModelOptions | null;
-  modelProvider: ModelProvider;
+  modelId: string;
   hasConversation: boolean;
   mode: AppMode;
   workspace: Workspace | null;
@@ -20,7 +20,7 @@ type ChatProps = {
   onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
   onOpenModelSettings: () => void;
-  onModelChange: (provider: ModelProvider) => Promise<void>;
+  onModelChange: (modelId: string) => Promise<void>;
   onSend: (task: string) => Promise<void>;
 };
 
@@ -39,7 +39,7 @@ function avatar(role: Message["role"]) {
 export default function Chat({
   status,
   modelOptions,
-  modelProvider,
+  modelId,
   hasConversation,
   mode,
   workspace,
@@ -72,8 +72,7 @@ export default function Chat({
   }
 
   const projectReady = mode === "chat" || Boolean(workspace);
-  const selectedModel = modelOptions?.models.find((option) => option.provider === modelProvider);
-  const remoteModel = modelOptions?.models.find((option) => option.provider === "remote");
+  const selectedModel = modelOptions?.models.find((option) => option.id === modelId);
   const remoteRemaining = modelOptions?.deepseek_quota.remaining;
   const prompts =
     mode === "chat"
@@ -96,23 +95,30 @@ export default function Chat({
         <div className="topbar-context">
           <label
             className="conversation-model-control"
-            title={remoteModel && !remoteModel.available ? remoteModel.unavailable_reason ?? undefined : "当前对话使用的模型"}
+            title={selectedModel?.unavailable_reason ?? "当前对话使用的模型"}
           >
-            {modelProvider === "local" ? <Cpu size={15} /> : <Cloud size={15} />}
+            {selectedModel?.provider === "remote" ? <Cloud size={15} /> : <Cpu size={15} />}
             <span>当前对话</span>
             <select
               aria-label="当前对话模型"
-              value={modelProvider}
+              value={modelId}
               disabled={busy || !hasConversation}
-              onChange={(event) => void onModelChange(event.target.value as ModelProvider)}
+              onChange={(event) => void onModelChange(event.target.value)}
             >
-              <option value="local">
-                {modelOptions?.models.find((option) => option.provider === "local")?.display_name ?? "MiniMind"}
-              </option>
-              <option value="remote" disabled={Boolean(remoteModel && !remoteModel.available)}>
-                {remoteModel?.display_name ?? "DeepSeek"}
-                {remoteRemaining === null || remoteRemaining === undefined ? "" : `（今日剩余 ${remoteRemaining} 次）`}
-              </option>
+              {modelOptions && !selectedModel ? (
+                <option value={modelId} disabled>
+                  当前模型已不在注册表中
+                </option>
+              ) : null}
+              {modelOptions?.models.map((option) => (
+                <option key={option.id} value={option.id} disabled={!option.available}>
+                  {option.display_name}
+                  {option.provider === "remote" && remoteRemaining !== null && remoteRemaining !== undefined
+                    ? `（今日剩余 ${remoteRemaining} 次）`
+                    : ""}
+                  {!option.available && option.unavailable_reason ? ` — ${option.unavailable_reason}` : ""}
+                </option>
+              )) ?? <option value={modelId}>正在读取模型...</option>}
             </select>
             <strong>{selectedModel?.model_name ?? status?.model_name ?? "连接中"}</strong>
           </label>
