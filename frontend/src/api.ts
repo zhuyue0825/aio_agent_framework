@@ -105,6 +105,41 @@ export type ModelOptions = {
   };
 };
 
+export type McpTool = {
+  name: string;
+  description: string;
+  read_only: boolean;
+};
+
+export type McpServer = {
+  id: string;
+  kind: "qq_mail" | string;
+  display_name: string;
+  transport: "builtin" | "streamable_http" | string;
+  enabled: boolean;
+  status: "connected" | "error" | string;
+  account: string;
+  credential_configured: boolean;
+  tools: McpTool[];
+  last_checked_at: string | null;
+  last_error_code: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type McpCatalogItem = {
+  kind: string;
+  display_name: string;
+  description: string;
+  transport: string;
+  tools: McpTool[];
+};
+
+export type McpServersResponse = {
+  servers: McpServer[];
+  catalog: McpCatalogItem[];
+};
+
 export type Project = {
   id: string;
   name: string;
@@ -404,6 +439,21 @@ export const api = {
   testModelSettings: () =>
     request<ModelConnectionTest>("/api/v1/model-settings/test", { method: "POST", body: "{}" }),
   modelOptions: () => request<ModelOptions>("/api/v1/model-options"),
+  listMcpServers: () => request<McpServersResponse>("/api/v1/mcp/servers"),
+  connectQqMail: (email: string, authorizationCode: string) =>
+    request<{ server: McpServer }>("/api/v1/mcp/servers/qq-mail", {
+      method: "PUT",
+      body: JSON.stringify({ email, authorization_code: authorizationCode }),
+    }),
+  testMcpServer: (id: string) =>
+    request<{ server: McpServer }>(`/api/v1/mcp/servers/${id}/test`, { method: "POST", body: "{}" }),
+  setMcpServerEnabled: (id: string, enabled: boolean) =>
+    request<{ server: McpServer }>(`/api/v1/mcp/servers/${id}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteMcpServer: (id: string) =>
+    request<{ ok: true }>(`/api/v1/mcp/servers/${id}`, { method: "DELETE" }),
   listConversations: (page = 0, size = 50) =>
     request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
   createConversation: (title = "新对话", modelId = "local:minimind-64m") =>

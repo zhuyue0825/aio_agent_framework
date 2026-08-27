@@ -44,6 +44,7 @@ public class AppProperties {
         private int deepseekRunsPerDay = 20;
         private String quotaTimeZone = "Asia/Shanghai";
         private boolean publicRegistrationEnabled;
+        private String connectorEncryptionKey;
 
         public String getJwtSecret() {
             return jwtSecret;
@@ -131,6 +132,14 @@ public class AppProperties {
 
         public void setQuotaTimeZone(String quotaTimeZone) {
             this.quotaTimeZone = quotaTimeZone;
+        }
+
+        public String getConnectorEncryptionKey() {
+            return connectorEncryptionKey;
+        }
+
+        public void setConnectorEncryptionKey(String connectorEncryptionKey) {
+            this.connectorEncryptionKey = connectorEncryptionKey;
         }
     }
 

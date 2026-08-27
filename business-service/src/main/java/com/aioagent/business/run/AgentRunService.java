@@ -15,6 +15,7 @@ import com.aioagent.business.conversation.MessageRole;
 import com.aioagent.business.project.Project;
 import com.aioagent.business.project.ProjectService;
 import com.aioagent.business.config.AppProperties;
+import com.aioagent.business.mcp.McpServerService;
 import com.aioagent.business.security.RateLimitService;
 import java.time.Duration;
 import java.time.Instant;
@@ -49,6 +50,7 @@ public class AgentRunService {
     private final AppProperties properties;
     private final RateLimitService rateLimits;
     private final ModelOptionsService modelOptions;
+    private final McpServerService mcpServers;
     private final TransactionTemplate transaction;
 
     public AgentRunService(
@@ -63,6 +65,7 @@ public class AgentRunService {
             AppProperties properties,
             RateLimitService rateLimits,
             ModelOptionsService modelOptions,
+            McpServerService mcpServers,
             TransactionTemplate transaction,
             ObjectMapper mapper) {
         this.runs = runs;
@@ -76,6 +79,7 @@ public class AgentRunService {
         this.properties = properties;
         this.rateLimits = rateLimits;
         this.modelOptions = modelOptions;
+        this.mcpServers = mcpServers;
         this.transaction = transaction;
         this.mapper = mapper;
     }
@@ -231,6 +235,7 @@ public class AgentRunService {
                 8,
                 run.getRequestedBy().getId(),
                 run.getProject() == null ? run.getRequestedBy().getId() : run.getProject().getOwner().getId(),
+                mcpServers.executionConfigs(run.getRequestedBy().getId()),
                 run.getTraceId()));
     }
 
@@ -511,7 +516,11 @@ public class AgentRunService {
             int maxSteps,
             UUID requestedById,
             UUID workspaceOwnerId,
+            List<AgentServiceClient.McpServerConfig> mcpServers,
             String traceId) {
+        public PreparedExecution {
+            mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
+        }
     }
 
     public record ChangeApplyClaim(

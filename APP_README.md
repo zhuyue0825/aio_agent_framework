@@ -86,9 +86,27 @@ Compose 会把仓库挂载到 Python 容器的 `/workspace/aio_agent_framework`�
 - `本地模型`：使用仓库内置 MiniMind，Compose 默认连接内部地址 `http://minimind:8998/v1`，模型名为 `minimind`。
 - “保存配置”只更新服务端模型资料；“保存并测试”会额外对当前测试目标发起一次最小模型请求。实际运行使用各对话自己的模型选择。
 
+本机 Qwen3 MLX 服务使用 `finetuning_lab/scripts/serve_qwen3_mlx.sh` 启动。应用请求不设置 `max_tokens`，回答会自然生成到模型结束标记；MLX 服务的防失控上限由 `QWEN_MLX_MAX_TOKENS` 控制，默认从上游的 512 提高到 8192。模型上下文长度和机器内存仍是不可移除的物理边界。
+
 API Key 只由浏览器发送给 Spring Boot，再通过内部令牌转发给 FastAPI。FastAPI 将它写入 Git 忽略的 `data/model-settings.json`，文件权限为 `600`；读取设置时只返回 `api_key_configured`，不会把 Key 回传到浏览器。
 
 公网部署应分别通过 `MODEL_REMOTE_ALLOWED_HOSTS` 和 `MODEL_LOCAL_ALLOWED_HOSTS` 固定可访问域名。不要为了临时调试把白名单改成任意地址。
+
+### 连接 QQ 邮箱 MCP Server
+
+登录后从左侧打开 `MCP Servers`，选择 QQ 邮箱并输入邮箱地址和在 QQ 邮箱设置中生成的授权码。服务端会先通过 `imap.qq.com:993` 测试连接，再保存配置：
+
+- 授权码由 Spring Boot 使用 AES-GCM 加密后存入 PostgreSQL，只向前端返回 `credential_configured`，不会回显原文。
+- 每个连接归属于当前登录用户；其他用户无法查看或使用。
+- 当前注册 `qq_mail_list_folders`、`qq_mail_list_messages`、`qq_mail_search_messages`、`qq_mail_read_message` 四个只读工具。
+- “最近 N 天”使用 IMAP `SINCE` 初筛，再按服务器 `INTERNALDATE` 精确过滤和排序；返回值会分别标明服务器收件时间 `received_at` 与邮件头声明时间 `header_date`。
+- 邮件 UID 只在对应目录内有效，读取非收件箱邮件时必须沿用列表结果中的 `folder_id`。
+- 文本搜索会批量读取目录中最近至多 200 封候选邮件；候选更多时返回 `scan_truncated=true`，Agent 必须说明结果并非整个目录的穷尽搜索。
+- 邮件内容视为不可信数据，Agent 的系统提示明确禁止执行邮件正文里的指令。
+- Agent 调用邮件工具时，完成请求所需的邮件内容会进入当前会话所选模型；若选择远程模型，相应内容会发送给该模型服务商。
+- 发信、删除和移动等写操作尚未开放，需先补齐逐次工具确认流程。
+
+生产环境建议为 `AIO_CONNECTOR_ENCRYPTION_KEY` 配置一个独立的至少 32 字节随机值；未设置时会从 `AIO_JWT_SECRET` 做用途隔离派生。首版只允许固定的 QQ IMAP 地址，避免用户通过连接器配置访问内网地址。
 
 MiniMind 已由 `docker compose up -d --build` 自动启动，并配置了健康检查和异常自动重启。模型源码在镜像构建时固定到上游提交，权重通过 `MINIMIND_WEIGHTS_HOST_PATH`（默认 `./minimind/out`）只读挂载，不会复制进镜像或提交到 Git。宿主机仅在 `127.0.0.1:8998` 暴露接口，可执行：
 
@@ -135,10 +153,12 @@ AIO_ALLOWED_WORKSPACE_ROOTS=/absolute/path/to/allowed/workspaces \
 - `GET /api/v1/runs/{id}/event-history?after=...&size=...`（游标分页）
 - `POST /api/v1/runs/{id}/changes/apply|reject`
 - `GET /api/v1/projects`、`POST /api/v1/projects/open`
+- `GET /api/v1/mcp/servers`、`PUT /api/v1/mcp/servers/qq-mail`
+- `POST /api/v1/mcp/servers/{id}/test`、`PUT /api/v1/mcp/servers/{id}/enabled`、`DELETE /api/v1/mcp/servers/{id}`
 - 项目成员与项目工作区文件 API
 - `GET /actuator/health`、`/actuator/metrics`、`/actuator/prometheus`
 
-FastAPI 只暴露带 `X-Internal-Token` 的 `/internal/v1/agent/*` 与 `/internal/v1/workspaces/*`，不向前端提供会话 API。
+FastAPI 只暴露带 `X-Internal-Token` 的 `/internal/v1/agent/*`、`/internal/v1/workspaces/*` 与 MCP 连接测试接口，不向前端提供会话 API。
 
 ## 运行保障
 

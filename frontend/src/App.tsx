@@ -23,6 +23,7 @@ import ChangeProposalPanel from "./ChangeProposalPanel";
 import CodePreview from "./CodePreview";
 import FolderPicker from "./FolderPicker";
 import ModelSettingsDialog from "./ModelSettingsDialog";
+import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
@@ -65,9 +66,11 @@ export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [modelOptions, setModelOptions] = useState<ModelOptions | null>(null);
   const [mode, setMode] = useState<AppMode>("chat");
+  const [activePage, setActivePage] = useState<"agent" | "mcp">("agent");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
@@ -116,7 +119,17 @@ export default function App() {
     setSelectedFile(null);
     setModifiedFiles([]);
     localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.root);
-    if (switchMode) setMode("project");
+    if (switchMode) {
+      setActivePage("agent");
+      setMode("project");
+    }
+    await refreshProjects();
+  }
+
+  async function refreshProjects() {
+    const data = await api.listProjects();
+    setProjects(data.projects);
+    return data.projects;
   }
 
   async function refreshWorkspace() {
@@ -168,6 +181,7 @@ export default function App() {
     }
     const id = await refreshConversations();
     await loadMessages(id);
+    await refreshProjects();
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
@@ -188,6 +202,7 @@ export default function App() {
     setConversations([]);
     setCurrentId(null);
     setMessages([]);
+    setProjects([]);
     setProject(null);
     setWorkspace(null);
     setSelectedFile(null);
@@ -240,6 +255,8 @@ export default function App() {
   }
 
   async function createConversation() {
+    setActivePage("agent");
+    setMode("chat");
     try {
       const currentModelId = conversations.find((item) => item.id === currentId)?.model_id
         ?? modelOptions?.models.find((item) => item.available)?.id
@@ -418,53 +435,67 @@ export default function App() {
   const currentConversation = conversations.find((item) => item.id === currentId) ?? null;
 
   return (
-    <div className={`app ${mode === "project" ? "project-mode" : "chat-mode"} ${selectedFile ? "has-preview" : ""}`}>
+    <div className={`app ${activePage === "mcp" ? "mcp-mode" : mode === "project" ? "project-mode" : "chat-mode"} ${selectedFile ? "has-preview" : ""}`}>
       <Sidebar
+        activePage={activePage}
         mode={mode}
         conversations={conversations}
         currentId={currentId}
+        projects={projects}
+        currentProjectId={project?.id ?? null}
         workspace={workspace}
         selectedPath={selectedFile?.path ?? null}
         modifiedFiles={modifiedFiles}
         onCreate={() => void createConversation()}
+        onOpenMcpServers={() => setActivePage("mcp")}
         onSelectConversation={setCurrentId}
         onDeleteConversation={(id) => void deleteConversation(id)}
+        onSelectProject={(path) => void openProject(path)}
         onOpenFolder={() => setFolderPickerOpen(true)}
         onRefreshWorkspace={() => void refreshWorkspace()}
         onSelectFile={(path) => void selectFile(path)}
       />
-      <Chat
-        status={status}
-        modelOptions={modelOptions}
-        modelId={currentConversation?.model_id ?? "local:minimind-64m"}
-        hasConversation={Boolean(currentConversation)}
-        mode={mode}
-        workspace={workspace}
-        messages={messages}
-        busy={Boolean(activeRun) || Boolean(runProgress)}
-        progress={runProgress}
-        streamingText={streamingText}
-        username={user.username}
-        canManageModel={user.role === "ADMIN"}
-        onLogout={() => void logout()}
-        onCancel={() => void cancelActiveRun()}
-        onModeChange={setMode}
-        onOpenFolder={() => setFolderPickerOpen(true)}
-        onOpenModelSettings={() => setModelSettingsOpen(true)}
-        onModelChange={selectConversationModel}
-        onSend={send}
-      />
-      {mode === "project" ? (
-        <CodePreview
-          file={selectedFile}
-          workspaceName={workspace?.name ?? null}
-          modified={Boolean(selectedFile && modifiedFiles.includes(selectedFile.path))}
-          saving={savingFile}
-          onRefresh={() => selectedFile && void selectFile(selectedFile.path)}
-          onClose={() => setSelectedFile(null)}
-          onSave={saveFile}
-        />
-      ) : null}
+      {activePage === "mcp" ? (
+        <McpServersPage username={user.username} onLogout={() => void logout()} />
+      ) : (
+        <>
+          <Chat
+            status={status}
+            modelOptions={modelOptions}
+            modelId={currentConversation?.model_id ?? "local:minimind-64m"}
+            hasConversation={Boolean(currentConversation)}
+            mode={mode}
+            workspace={workspace}
+            messages={messages}
+            busy={Boolean(activeRun) || Boolean(runProgress)}
+            progress={runProgress}
+            streamingText={streamingText}
+            username={user.username}
+            canManageModel={user.role === "ADMIN"}
+            onLogout={() => void logout()}
+            onCancel={() => void cancelActiveRun()}
+            onModeChange={(nextMode) => {
+              setActivePage("agent");
+              setMode(nextMode);
+            }}
+            onOpenFolder={() => setFolderPickerOpen(true)}
+            onOpenModelSettings={() => setModelSettingsOpen(true)}
+            onModelChange={selectConversationModel}
+            onSend={send}
+          />
+          {mode === "project" ? (
+            <CodePreview
+              file={selectedFile}
+              workspaceName={workspace?.name ?? null}
+              modified={Boolean(selectedFile && modifiedFiles.includes(selectedFile.path))}
+              saving={savingFile}
+              onRefresh={() => selectedFile && void selectFile(selectedFile.path)}
+              onClose={() => setSelectedFile(null)}
+              onSave={saveFile}
+            />
+          ) : null}
+        </>
+      )}
       <FolderPicker
         open={folderPickerOpen}
         initialPath={workspace?.root}

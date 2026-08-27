@@ -9,6 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -28,6 +29,7 @@ import com.aioagent.business.conversation.ConversationMode;
 import com.aioagent.business.conversation.ConversationModelProvider;
 import com.aioagent.business.conversation.ConversationService;
 import com.aioagent.business.project.ProjectService;
+import com.aioagent.business.mcp.McpServerService;
 import com.aioagent.business.migration.LegacySqliteImporter;
 import com.aioagent.business.run.AgentRunService;
 import com.aioagent.business.run.AgentRun;
@@ -119,6 +121,9 @@ class BusinessServiceIntegrationTest {
     ProjectService projects;
 
     @Autowired
+    McpServerService mcpServers;
+
+    @Autowired
     AppProperties properties;
 
     @Autowired
@@ -135,7 +140,7 @@ class BusinessServiceIntegrationTest {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(8);
+        assertThat(migrationCount).isEqualTo(9);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 
@@ -820,6 +825,82 @@ class BusinessServiceIntegrationTest {
                 .andExpect(jsonPath("$.active_provider").value("remote"))
                 .andExpect(jsonPath("$.remote.api_key_configured").value(true))
                 .andExpect(jsonPath("$.remote.api_key").doesNotExist());
+    }
+
+    @Test
+    void qqMailMcpConnectionIsUserScopedAndNeverReturnsTheAuthorizationCode() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount user = authService.register("mcp-mail-" + suffix, "password-1234").user();
+        UserAccount other = authService.register("mcp-other-" + suffix, "password-1234").user();
+        when(agentService.testQqMail(any(AgentServiceClient.QqMailTestRequest.class)))
+                .thenReturn(new AgentServiceClient.QqMailTestResponse(
+                        true,
+                        12,
+                        List.of(
+                                "qq_mail_list_folders",
+                                "qq_mail_list_messages",
+                                "qq_mail_search_messages",
+                                "qq_mail_read_message")));
+
+        MvcResult connected = mockMvc.perform(put("/api/v1/mcp/servers/qq-mail")
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"123456789@qq.com","authorization_code":"qq-mail-auth-code"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.server.kind").value("qq_mail"))
+                .andExpect(jsonPath("$.server.account").value("12****@qq.com"))
+                .andExpect(jsonPath("$.server.credential_configured").value(true))
+                .andExpect(jsonPath("$.server.authorization_code").doesNotExist())
+                .andExpect(jsonPath("$.server.tools.length()").value(4))
+                .andReturn();
+
+        String serverId = com.jayway.jsonpath.JsonPath.read(
+                connected.getResponse().getContentAsString(),
+                "$.server.id");
+        String encrypted = jdbcTemplate.queryForObject(
+                "select encrypted_secret from mcp_server_connections where id = ?",
+                String.class,
+                UUID.fromString(serverId));
+        assertThat(encrypted).startsWith("v1.").doesNotContain("qq-mail-auth-code");
+        assertThat(mcpServers.executionConfigs(user.getId()))
+                .singleElement()
+                .satisfies(config -> {
+                    assertThat(config.kind()).isEqualTo("qq_mail");
+                    assertThat(config.config()).containsEntry("email", "123456789@qq.com");
+                    assertThat(config.credentials()).containsEntry("authorization_code", "qq-mail-auth-code");
+                });
+
+        mockMvc.perform(get("/api/v1/mcp/servers")
+                        .with(jwt().jwt(token -> token
+                                .subject(other.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.servers.length()").value(0));
+
+        mockMvc.perform(put("/api/v1/mcp/servers/{id}/enabled", serverId)
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"enabled\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.server.enabled").value(false));
+        assertThat(mcpServers.executionConfigs(user.getId())).isEmpty();
+
+        mockMvc.perform(delete("/api/v1/mcp/servers/{id}", serverId)
+                        .with(jwt().jwt(token -> token
+                                .subject(user.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from mcp_server_connections where id = ?",
+                Integer.class,
+                UUID.fromString(serverId))).isZero();
     }
 
     @Test

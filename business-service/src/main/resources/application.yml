@@ -56,6 +56,7 @@ app:
     deepseek-runs-per-day: ${AIO_DEEPSEEK_RUNS_PER_USER_PER_DAY:20}
     quota-time-zone: ${AIO_QUOTA_TIME_ZONE:Asia/Shanghai}
     public-registration-enabled: ${AIO_PUBLIC_REGISTRATION_ENABLED:false}
+    connector-encryption-key: ${AIO_CONNECTOR_ENCRYPTION_KEY:}
   agent:
     base-url: ${AGENT_SERVICE_BASE_URL:http://127.0.0.1:8000}
     callback-base-url: ${BUSINESS_SERVICE_CALLBACK_BASE_URL:http://127.0.0.1:8081}
