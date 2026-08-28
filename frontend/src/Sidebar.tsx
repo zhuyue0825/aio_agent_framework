@@ -1,4 +1,6 @@
 import {
+  Bell,
+  Blocks,
   ChevronDown,
   ChevronRight,
   File,
@@ -6,21 +8,28 @@ import {
   FolderOpen,
   Plus,
   RefreshCw,
+  Search,
+  SquarePen,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AppMode, Conversation, Workspace, WorkspaceNode } from "./api";
+import type { AppMode, Conversation, Project, Workspace, WorkspaceNode } from "./api";
 
 type SidebarProps = {
+  activePage: "agent" | "mcp";
   mode: AppMode;
   conversations: Conversation[];
   currentId: string | null;
+  projects: Project[];
+  currentProjectId: string | null;
   workspace: Workspace | null;
   selectedPath: string | null;
   modifiedFiles: string[];
   onCreate: () => void;
+  onOpenMcpServers: () => void;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
+  onSelectProject: (path: string) => void;
   onOpenFolder: () => void;
   onRefreshWorkspace: () => void;
   onSelectFile: (path: string) => void;
@@ -91,15 +100,20 @@ function FileTree({
 }
 
 export default function Sidebar({
+  activePage,
   mode,
   conversations,
   currentId,
+  projects,
+  currentProjectId,
   workspace,
   selectedPath,
   modifiedFiles,
   onCreate,
+  onOpenMcpServers,
   onSelectConversation,
   onDeleteConversation,
+  onSelectProject,
   onOpenFolder,
   onRefreshWorkspace,
   onSelectFile,
@@ -112,21 +126,68 @@ export default function Sidebar({
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">A</div>
-        <div>
-          <div className="brand-title">AIO Agent</div>
-          <div className="brand-subtitle">Local workspace</div>
+      <div className="brand codex-brand">
+        <button className="brand-name" title="AIO Agent">
+          <span>AIO Agent</span>
+          <ChevronDown size={15} />
+        </button>
+        <div className="brand-utilities">
+          <button className="icon-button" title="搜索（即将支持）" disabled>
+            <Search size={18} />
+          </button>
+          <button className="icon-button" title="通知（即将支持）" disabled>
+            <Bell size={18} />
+          </button>
         </div>
-        <button className="icon-button brand-action" title="新对话" onClick={onCreate}>
-          <Plus size={17} />
+      </div>
+
+      <nav className="primary-navigation" aria-label="主导航">
+        <button
+          className={activePage === "agent" && mode === "chat" ? "active" : ""}
+          onClick={onCreate}
+        >
+          <SquarePen size={18} />
+          <span>新对话</span>
+          <Plus className="nav-trailing" size={16} />
+        </button>
+        <button className={activePage === "mcp" ? "active" : ""} onClick={onOpenMcpServers}>
+          <Blocks size={18} />
+          <span>MCP Servers</span>
+        </button>
+      </nav>
+
+      <div className="section-heading project-section-heading">
+        <span>项目</span>
+        <button className="icon-button" title="打开项目文件夹" onClick={onOpenFolder}>
+          <Plus size={16} />
         </button>
       </div>
 
-      {mode === "chat" ? (
+      <div className="sidebar-project-list">
+        {projects.slice(0, 8).map((item) => (
+          <button
+            className={item.id === currentProjectId && mode === "project" ? "active" : ""}
+            key={item.id}
+            title={item.workspace_root}
+            onClick={() => onSelectProject(item.workspace_root)}
+          >
+            <Folder size={16} />
+            <span>{item.name}</span>
+          </button>
+        ))}
+        {!projects.length ? <span className="sidebar-project-empty">打开文件夹后会显示在这里</span> : null}
+      </div>
+
+      {activePage === "mcp" ? (
+        <div className="sidebar-context-note">
+          <Blocks size={20} />
+          <strong>工具与连接器</strong>
+          <span>在右侧管理 Agent 可以使用的外部服务。</span>
+        </div>
+      ) : mode === "chat" ? (
         <>
           <div className="section-heading">
-            <span>对话记录</span>
+            <span>最近对话</span>
             <button className="icon-button" title="新对话" onClick={onCreate}>
               <Plus size={16} />
             </button>

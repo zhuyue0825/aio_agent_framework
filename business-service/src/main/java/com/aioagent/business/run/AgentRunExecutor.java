@@ -55,6 +55,7 @@ public class AgentRunExecutor {
                     prepared.traceId(),
                     prepared.requestedById(),
                     prepared.workspaceOwnerId(),
+                    prepared.mcpServers(),
                     agentService.callbackUrl(runId));
             runs.complete(runId, agentService.execute(request));
         } catch (AgentServiceException exception) {

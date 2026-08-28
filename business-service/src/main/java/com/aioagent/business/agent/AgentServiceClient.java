@@ -121,6 +121,19 @@ public class AgentServiceClient {
         }
     }
 
+    public QqMailTestResponse testQqMail(QqMailTestRequest request) {
+        try {
+            return client.post()
+                    .uri("/internal/v1/mcp/qq-mail/test")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(QqMailTestResponse.class);
+        } catch (RestClientException exception) {
+            throw wrap("QQ Mail connection test failed", exception);
+        }
+    }
+
     public void cancel(UUID runId, String traceId) {
         try {
             client.delete()
@@ -266,6 +279,31 @@ public class AgentServiceClient {
     public record HistoryMessage(String role, String content) {
     }
 
+    public record McpServerConfig(
+            UUID id,
+            String kind,
+            String displayName,
+            Map<String, Object> config,
+            Map<String, String> credentials) {
+        public McpServerConfig {
+            config = config == null ? Map.of() : Map.copyOf(config);
+            credentials = credentials == null ? Map.of() : Map.copyOf(credentials);
+        }
+    }
+
+    public record QqMailTestRequest(
+            String email,
+            String authorizationCode,
+            String imapHost,
+            int imapPort) {
+    }
+
+    public record QqMailTestResponse(boolean ok, int messageCount, List<String> tools) {
+        public QqMailTestResponse {
+            tools = tools == null ? List.of() : List.copyOf(tools);
+        }
+    }
+
     public record ExecutionRequest(
             UUID runId,
             String task,
@@ -279,9 +317,11 @@ public class AgentServiceClient {
             String traceId,
             UUID requestedById,
             UUID workspaceOwnerId,
+            List<McpServerConfig> mcpServers,
             String callbackUrl) {
         public ExecutionRequest {
             history = history == null ? List.of() : history;
+            mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
         }
     }
 

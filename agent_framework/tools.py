@@ -36,6 +36,10 @@ class ToolRegistry:
             raise ValueError(f"duplicate tool: {tool.name}")
         self._tools[tool.name] = tool
 
+    def extend(self, other: "ToolRegistry") -> None:
+        for tool in other._tools.values():
+            self.register(tool)
+
     def specs(self) -> list[dict[str, Any]]:
         return [tool.as_openai_tool() for tool in self._tools.values()]
 

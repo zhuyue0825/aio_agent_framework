@@ -1,6 +1,7 @@
 import { Cloud, Cpu, FolderCode, FolderOpen, LogOut, MessageSquare, Send, Settings, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AppMode, Message, ModelOptions, Status, Workspace } from "./api";
+import RichText from "./RichText";
 
 type ChatProps = {
   status: Status | null;
@@ -17,7 +18,6 @@ type ChatProps = {
   canManageModel: boolean;
   onLogout: () => void;
   onCancel: () => void;
-  onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
   onOpenModelSettings: () => void;
   onModelChange: (modelId: string) => Promise<void>;
@@ -51,7 +51,6 @@ export default function Chat({
   canManageModel,
   onLogout,
   onCancel,
-  onModeChange,
   onOpenFolder,
   onOpenModelSettings,
   onModelChange,
@@ -82,16 +81,6 @@ export default function Chat({
   return (
     <main className="chat-shell">
       <header className="topbar">
-        <div className="mode-control" aria-label="工作模式">
-          <button disabled={busy} className={mode === "chat" ? "active" : ""} onClick={() => onModeChange("chat")}>
-            <MessageSquare size={16} />
-            纯对话
-          </button>
-          <button disabled={busy} className={mode === "project" ? "active" : ""} onClick={() => onModeChange("project")}>
-            <FolderCode size={16} />
-            项目工作
-          </button>
-        </div>
         <div className="topbar-context">
           <label
             className="conversation-model-control"
@@ -187,7 +176,11 @@ export default function Chat({
                   <div className="avatar">{avatar(message.role)}</div>
                   <div className="bubble">
                     <div className="role">{roleLabel(message.role)}</div>
-                    <div className="content">{message.content}</div>
+                    {message.role === "user" ? (
+                      <div className="content plain-text">{message.content}</div>
+                    ) : (
+                      <RichText>{message.content}</RichText>
+                    )}
                     {changedFiles.length ? (
                       <div className="changed-summary">已修改 {changedFiles.join("、")}</div>
                     ) : null}
@@ -205,7 +198,7 @@ export default function Chat({
               <div className="avatar">AI</div>
               <div className="bubble">
                 <div className="role">{progress ?? (mode === "project" ? "正在处理项目" : "正在回复")}</div>
-                {streamingText ? <div className="content streaming-content">{streamingText}</div> : null}
+                {streamingText ? <RichText className="streaming-content">{streamingText}</RichText> : null}
                 <div className="run-progress-row">
                   <div className="typing">
                     <span />
