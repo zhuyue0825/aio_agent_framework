@@ -24,7 +24,7 @@ MAX_BODY_CHARS = 8_000
 MAX_FETCH_BYTES = 262_144
 
 _LIST_RESPONSE = re.compile(
-    rb'^\((?P<flags>[^)]*)\)\s+(?P<delimiter>NIL|"(?:\\.|[^"])*")\s+(?P<mailbox>.+)$'
+    rb'^\((?P<flags>[^)]*)\)\s+(?P<delimiter>NIL|"(?:\\[^\r\n]|[^"\\\r\n])*")\s+(?P<mailbox>.+)$'
 )
 _INTERNALDATE = re.compile(rb'INTERNALDATE\s+"(?P<value>[^"]+)"', re.IGNORECASE)
 _UID = re.compile(rb'UID\s+(?P<value>\d+)', re.IGNORECASE)
