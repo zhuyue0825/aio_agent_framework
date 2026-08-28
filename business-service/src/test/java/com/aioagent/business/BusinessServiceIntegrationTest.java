@@ -724,6 +724,39 @@ class BusinessServiceIntegrationTest {
     }
 
     @Test
+    void projectListSerializesAfterTheReadOnlyTransactionCloses() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        UserAccount owner = authService.register("project-list-owner-" + suffix, "password-1234").user();
+        UserAccount member = authService.register("project-list-member-" + suffix, "password-1234").user();
+        String workspaceRoot = "/workspace/project-list-" + suffix;
+        when(agentService.openWorkspace(anyString(), any(UUID.class))).thenReturn(Map.of(
+                "workspace",
+                Map.of("root", workspaceRoot, "name", "project-list", "tree", List.of())));
+
+        ProjectService.OpenProjectResult opened = projects.open(owner, workspaceRoot);
+        projects.addMember(opened.project().getId(), owner, member.getUsername());
+
+        mockMvc.perform(get("/api/v1/projects")
+                        .with(jwt().jwt(token -> token
+                                .subject(owner.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.projects[0].id").value(opened.project().getId().toString()))
+                .andExpect(jsonPath("$.projects[0].name").value("project-list"))
+                .andExpect(jsonPath("$.projects[0].workspace_root").value(workspaceRoot))
+                .andExpect(jsonPath("$.projects[0].owner_id").value(owner.getId().toString()));
+
+        mockMvc.perform(get("/api/v1/projects/{projectId}/members", opened.project().getId())
+                        .with(jwt().jwt(token -> token
+                                .subject(owner.getId().toString())
+                                .claim("role", "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.members.length()").value(2))
+                .andExpect(jsonPath("$.members[0].username").value(owner.getUsername()))
+                .andExpect(jsonPath("$.members[1].username").value(member.getUsername()));
+    }
+
+    @Test
     void projectMembershipProtectsWorkspaceBusinessOperations() {
         UserAccount owner = authService.register("project-owner", "password-1234").user();
         UserAccount member = authService.register("project-member", "password-1234").user();
