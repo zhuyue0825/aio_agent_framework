@@ -347,6 +347,32 @@ export default function App() {
     }
   }
 
+  async function selectConversation(id: string) {
+    const conversation = conversations.find((item) => item.id === id);
+    setActivePage("agent");
+    setCurrentId(id);
+    setSelectedFile(null);
+    if (!conversation) return;
+
+    setMode(conversation.mode);
+    if (conversation.mode !== "project" || !conversation.project_id || conversation.project_id === project?.id) return;
+
+    let targetProject = projects.find((item) => item.id === conversation.project_id);
+    if (!targetProject) {
+      const refreshedProjects = await refreshProjects();
+      targetProject = refreshedProjects.find((item) => item.id === conversation.project_id);
+    }
+    if (!targetProject) {
+      setToast("这个对话关联的项目已不可用，请重新打开项目文件夹");
+      return;
+    }
+    try {
+      await openProject(targetProject.workspace_root, false);
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function selectConversationModel(modelId: string) {
     if (!currentId || activeRun) return;
     try {
@@ -524,17 +550,12 @@ export default function App() {
         currentId={currentId}
         projects={projects}
         currentProjectId={project?.id ?? null}
-        workspace={workspace}
-        selectedPath={selectedFile?.path ?? null}
-        modifiedFiles={modifiedFiles}
         onCreate={() => void createConversation()}
         onOpenMcpServers={() => setActivePage("mcp")}
-        onSelectConversation={setCurrentId}
+        onSelectConversation={(id) => void selectConversation(id)}
         onDeleteConversation={(id) => void deleteConversation(id)}
         onSelectProject={(path) => void openProject(path)}
         onOpenFolder={() => setFolderPickerOpen(true)}
-        onRefreshWorkspace={() => void refreshWorkspace()}
-        onSelectFile={(path) => void selectFile(path)}
       />
       {activePage === "mcp" ? (
         <McpServersPage username={user.username} onLogout={() => void logout()} />
