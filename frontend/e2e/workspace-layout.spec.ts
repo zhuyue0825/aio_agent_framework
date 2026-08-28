@@ -34,6 +34,47 @@ test("uses project selection as context and shows a resizable preview only for a
     entry_count: 2,
     truncated: false,
   };
+  const conversation = {
+    id: "conversation-1",
+    title: "保留的最近对话",
+    mode: "chat",
+    model_provider: "local",
+    model_id: "local:minimind-64m",
+    project_id: null,
+    created_at: now,
+    updated_at: now,
+    message_count: 2,
+  };
+  const completedRun = {
+    id: "run-1",
+    conversation_id: conversation.id,
+    project_id: project.id,
+    status: "SUCCEEDED",
+    task: "修改示例文件",
+    mode: "project",
+    trace_id: "trace-layout",
+    final_answer: "已完成",
+    steps: 1,
+    model_provider: "local",
+    model_id: "local:minimind-64m",
+    model_name: "minimind",
+    model_request_count: 1,
+    input_tokens: 10,
+    output_tokens: 10,
+    model_latency_ms: 20,
+    attempt_count: 1,
+    changed_files: ["src/example.ts"],
+    proposed_changes: [],
+    change_status: "APPLIED",
+    changes_applied_at: now,
+    change_apply_started_at: now,
+    change_error_message: null,
+    error_code: null,
+    error_message: null,
+    created_at: now,
+    started_at: now,
+    finished_at: now,
+  };
 
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -88,8 +129,12 @@ test("uses project selection as context and shows a resizable preview only for a
         },
       });
     }
-    if (path === "/api/v1/conversations") return route.fulfill({ json: { conversations: [] } });
+    if (path === "/api/v1/conversations") return route.fulfill({ json: { conversations: [conversation] } });
+    if (path.endsWith("/messages")) return route.fulfill({ json: { messages: [] } });
     if (path === "/api/v1/projects/open") return route.fulfill({ json: { project, workspace } });
+    if (path === "/api/v1/projects/project-1/workspace/tree") {
+      return route.fulfill({ json: { workspace } });
+    }
     if (path === "/api/v1/projects/project-1/workspace/file") {
       return route.fulfill({
         json: {
@@ -104,6 +149,32 @@ test("uses project selection as context and shows a resizable preview only for a
         },
       });
     }
+    if (path.endsWith("/runs") && route.request().method() === "POST") {
+      return route.fulfill({
+        status: 202,
+        json: {
+          run: {
+            ...completedRun,
+            status: "RUNNING",
+            final_answer: null,
+            changed_files: [],
+            finished_at: null,
+          },
+        },
+      });
+    }
+    if (path === "/api/v1/runs/run-1/events") {
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `id: 1\nevent: run.succeeded\ndata: ${JSON.stringify({
+          id: 1,
+          event_type: "run.succeeded",
+          payload: {},
+          created_at: now,
+        })}\n\n`,
+      });
+    }
+    if (path === "/api/v1/runs/run-1") return route.fulfill({ json: { run: completedRun } });
     if (path === "/api/v1/projects") return route.fulfill({ json: { projects: [project] } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_MOCKED", message: path } } });
   });
@@ -115,13 +186,19 @@ test("uses project selection as context and shows a resizable preview only for a
 
   await expect(page.getByRole("button", { name: "纯对话" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "项目工作" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "aio-project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保留的最近对话" })).toBeVisible();
 
   await page.getByRole("button", { name: "aio-project" }).click();
   await expect(page.locator(".app")).toHaveClass(/project-mode/);
+  await expect(page.getByRole("button", { name: "aio-project" })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "保留的最近对话" })).toBeVisible();
+  await expect(page.locator(".file-tree")).toHaveCount(0);
   await expect(page.locator(".preview-panel")).toHaveCount(0);
   await expect(page.getByRole("separator", { name: "调整代码预览宽度" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "example.ts" }).click();
+  await page.getByPlaceholder("让 Agent 在 aio-project 中完成任务...").fill("修改示例文件");
+  await page.getByRole("button", { name: "发送" }).click();
   const preview = page.locator(".preview-panel");
   const resizer = page.getByRole("separator", { name: "调整代码预览宽度" });
   await expect(preview).toBeVisible();
@@ -144,4 +221,8 @@ test("uses project selection as context and shows a resizable preview only for a
   await page.getByRole("button", { name: "关闭预览" }).click();
   await expect(preview).toHaveCount(0);
   await expect(resizer).toHaveCount(0);
+
+  await page.getByRole("button", { name: "保留的最近对话" }).click();
+  await expect(page.locator(".app")).toHaveClass(/chat-mode/);
+  await expect(page.getByRole("button", { name: "aio-project" })).toBeVisible();
 });
