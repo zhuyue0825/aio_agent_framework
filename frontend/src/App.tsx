@@ -84,6 +84,8 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
+  const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(() => new Set());
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -99,6 +101,8 @@ export default function App() {
   const appRef = useRef<HTMLDivElement | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
   const previewResizeCleanupRef = useRef<(() => void) | null>(null);
+  const workspaceCacheRef = useRef<Map<string, Workspace>>(new Map());
+  const projectSelectionRequestRef = useRef(0);
 
   function previewWidthLimit() {
     const appWidth = appRef.current?.getBoundingClientRect().width ?? window.innerWidth;
@@ -171,18 +175,82 @@ export default function App() {
     setMessages(data.messages);
   }
 
+  function rememberWorkspace(projectId: string, nextWorkspace: Workspace) {
+    workspaceCacheRef.current.set(projectId, nextWorkspace);
+  }
+
+  function clearProjectUnavailable(projectId: string) {
+    setUnavailableProjectIds((current) => {
+      if (!current.has(projectId)) return current;
+      const next = new Set(current);
+      next.delete(projectId);
+      return next;
+    });
+  }
+
+  function markProjectUnavailable(projectId: string) {
+    setUnavailableProjectIds((current) => {
+      if (current.has(projectId)) return current;
+      const next = new Set(current);
+      next.add(projectId);
+      return next;
+    });
+  }
+
   async function openProject(path: string, switchMode = true) {
+    const requestId = ++projectSelectionRequestRef.current;
+    setProjectLoadingId(null);
     const data = await api.openProject(path);
+    if (requestId !== projectSelectionRequestRef.current) return false;
+    rememberWorkspace(data.project.id, data.workspace);
     setProject(data.project);
     setWorkspace(data.workspace);
+    clearProjectUnavailable(data.project.id);
     setSelectedFile(null);
     setModifiedFiles([]);
     localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.root);
+    setProjects((current) => [data.project, ...current.filter((item) => item.id !== data.project.id)]);
     if (switchMode) {
       setActivePage("agent");
       setMode("project");
     }
-    await refreshProjects();
+    return true;
+  }
+
+  async function selectExistingProject(targetProject: Project, switchMode = true) {
+    const requestId = ++projectSelectionRequestRef.current;
+    const previousProject = project;
+    const previousWorkspace = workspace;
+    const cachedWorkspace = workspaceCacheRef.current.get(targetProject.id) ?? null;
+
+    setActivePage("agent");
+    if (switchMode) setMode("project");
+    setProject(targetProject);
+    setWorkspace(cachedWorkspace);
+    setSelectedFile(null);
+    setModifiedFiles([]);
+    setProjectLoadingId(targetProject.id);
+
+    try {
+      const data = await api.workspaceTree(targetProject.id);
+      if (requestId !== projectSelectionRequestRef.current) return false;
+      rememberWorkspace(targetProject.id, data.workspace);
+      setWorkspace(data.workspace);
+      clearProjectUnavailable(targetProject.id);
+      localStorage.setItem(WORKSPACE_STORAGE_KEY, data.workspace.root);
+      return true;
+    } catch (err) {
+      if (requestId !== projectSelectionRequestRef.current) return false;
+      markProjectUnavailable(targetProject.id);
+      setProject(previousProject);
+      setWorkspace(previousWorkspace);
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `项目“${targetProject.name}”的目录在当前部署中不可用，可能是旧开发模式留下的记录。请从 /workspaces 重新打开有效文件夹。${reason ? ` ${reason}` : ""}`,
+      );
+    } finally {
+      if (requestId === projectSelectionRequestRef.current) setProjectLoadingId(null);
+    }
   }
 
   async function refreshProjects() {
@@ -194,6 +262,7 @@ export default function App() {
   async function refreshWorkspace() {
     if (!project) return null;
     const data = await api.workspaceTree(project.id);
+    rememberWorkspace(project.id, data.workspace);
     setWorkspace(data.workspace);
     return data.workspace;
   }
@@ -240,11 +309,13 @@ export default function App() {
     }
     const id = await refreshConversations();
     await loadMessages(id);
-    await refreshProjects();
+    const loadedProjects = await refreshProjects();
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
-        await openProject(previousWorkspace, false);
+        const existingProject = loadedProjects.find((item) => item.workspace_root === previousWorkspace);
+        if (existingProject) await selectExistingProject(existingProject, false);
+        else await openProject(previousWorkspace, false);
       } catch {
         localStorage.removeItem(WORKSPACE_STORAGE_KEY);
       }
@@ -264,6 +335,10 @@ export default function App() {
     setProjects([]);
     setProject(null);
     setWorkspace(null);
+    setProjectLoadingId(null);
+    setUnavailableProjectIds(new Set());
+    workspaceCacheRef.current.clear();
+    projectSelectionRequestRef.current += 1;
     setSelectedFile(null);
     setActiveRun(null);
     setRunProgress(null);
@@ -340,7 +415,8 @@ export default function App() {
         return;
       }
       if (targetProject && targetProject.id !== project?.id) {
-        await openProject(targetProject.workspace_root, false);
+        const selected = await selectExistingProject(targetProject, false);
+        if (!selected) return;
       }
       setMode(targetProject ? "project" : "chat");
       const currentModelId = conversations.find((item) => item.id === currentId)?.model_id
@@ -375,7 +451,7 @@ export default function App() {
       return;
     }
     try {
-      await openProject(targetProject.workspace_root, false);
+      await selectExistingProject(targetProject, false);
     } catch (err) {
       setToast(err instanceof Error ? err.message : String(err));
     }
@@ -558,12 +634,18 @@ export default function App() {
         currentId={currentId}
         projects={projects}
         currentProjectId={project?.id ?? null}
+        projectLoadingId={projectLoadingId}
+        unavailableProjectIds={unavailableProjectIds}
         onCreate={() => void createConversation()}
         onCreateProjectConversation={(projectId) => void createConversation(projectId)}
         onOpenMcpServers={() => setActivePage("mcp")}
         onSelectConversation={(id) => void selectConversation(id)}
         onDeleteConversation={(id) => void deleteConversation(id)}
-        onSelectProject={(path) => void openProject(path)}
+        onSelectProject={(targetProject) => {
+          void selectExistingProject(targetProject).catch((err) => {
+            setToast(err instanceof Error ? err.message : String(err));
+          });
+        }}
         onOpenFolder={() => setFolderPickerOpen(true)}
       />
       {activePage === "mcp" ? (

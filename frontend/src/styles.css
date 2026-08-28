@@ -248,6 +248,43 @@ button.primary:hover {
   white-space: nowrap;
 }
 
+.sidebar-project-label {
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sidebar-project-label > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-project-label small {
+  flex: none;
+  color: #8b5e00;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.sidebar-project-group.unavailable .sidebar-project-main {
+  color: #8b5e00;
+}
+
+.project-folder-loading {
+  animation: project-folder-pulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes project-folder-pulse {
+  from {
+    opacity: 0.35;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .sidebar-project-row:hover,
 .sidebar-project-group.active > .sidebar-project-row {
   background: #1f23290a;
