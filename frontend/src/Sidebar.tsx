@@ -17,12 +17,14 @@ type SidebarProps = {
   currentId: string | null;
   projects: Project[];
   currentProjectId: string | null;
+  projectLoadingId: string | null;
+  unavailableProjectIds: Set<string>;
   onCreate: () => void;
   onCreateProjectConversation: (projectId: string) => void;
   onOpenMcpServers: () => void;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
-  onSelectProject: (path: string) => void;
+  onSelectProject: (project: Project) => void;
   onOpenFolder: () => void;
 };
 
@@ -84,6 +86,8 @@ export default function Sidebar({
   currentId,
   projects,
   currentProjectId,
+  projectLoadingId,
+  unavailableProjectIds,
   onCreate,
   onCreateProjectConversation,
   onOpenMcpServers,
@@ -141,16 +145,25 @@ export default function Sidebar({
           {projects.map((item) => {
             const projectConversations = conversations.filter((conversation) => conversation.project_id === item.id);
             const active = activePage === "agent" && item.id === currentProjectId && mode === "project";
+            const loading = item.id === projectLoadingId;
+            const unavailable = unavailableProjectIds.has(item.id);
             return (
-              <section className={`sidebar-project-group ${active ? "active" : ""}`} aria-label={`${item.name} 项目`} key={item.id}>
+              <section
+                className={`sidebar-project-group ${active ? "active" : ""} ${unavailable ? "unavailable" : ""}`}
+                aria-label={`${item.name} 项目`}
+                key={item.id}
+              >
                 <div className="sidebar-project-row">
                   <button
                     className="sidebar-project-main"
-                    title={item.workspace_root}
-                    onClick={() => onSelectProject(item.workspace_root)}
+                    title={unavailable ? `${item.workspace_root}（当前部署不可用）` : item.workspace_root}
+                    onClick={() => onSelectProject(item)}
                   >
-                    <Folder size={16} />
-                    <span>{item.name}</span>
+                    <Folder className={loading ? "project-folder-loading" : ""} size={16} />
+                    <span className="sidebar-project-label">
+                      <span>{item.name}</span>
+                      {loading ? <small>加载中</small> : unavailable ? <small>不可用</small> : null}
+                    </span>
                   </button>
                   <button
                     className="icon-button project-new-conversation"

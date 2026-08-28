@@ -42,6 +42,8 @@ it("groups project conversations under their project and keeps standalone chats 
       currentId="project-conversation"
       projects={[project]}
       currentProjectId={project.id}
+      projectLoadingId={null}
+      unavailableProjectIds={new Set()}
       onCreate={vi.fn()}
       onCreateProjectConversation={createProjectConversation}
       onDeleteConversation={vi.fn()}
@@ -63,4 +65,32 @@ it("groups project conversations under their project and keeps standalone chats 
 
   await userEvent.click(screen.getByRole("button", { name: "在 aio-project 中新建对话" }));
   expect(createProjectConversation).toHaveBeenCalledWith(project.id);
+});
+
+it("marks a project that is unavailable in the current deployment", () => {
+  render(
+    <Sidebar
+      activePage="agent"
+      mode="chat"
+      conversations={[]}
+      currentId={null}
+      projects={[project]}
+      currentProjectId={null}
+      projectLoadingId={null}
+      unavailableProjectIds={new Set([project.id])}
+      onCreate={vi.fn()}
+      onCreateProjectConversation={vi.fn()}
+      onDeleteConversation={vi.fn()}
+      onOpenFolder={vi.fn()}
+      onOpenMcpServers={vi.fn()}
+      onSelectConversation={vi.fn()}
+      onSelectProject={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText("不可用")).toBeVisible();
+  expect(within(screen.getByRole("region", { name: "aio-project 项目" })).getByTitle(/当前部署不可用/)).toHaveAttribute(
+    "title",
+    "/workspaces/aio-project（当前部署不可用）",
+  );
 });
