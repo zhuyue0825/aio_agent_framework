@@ -331,14 +331,22 @@ export default function App() {
     await initializeAuthenticatedApp();
   }
 
-  async function createConversation() {
+  async function createConversation(projectId?: string) {
     setActivePage("agent");
-    setMode("chat");
     try {
+      const targetProject = projectId ? projects.find((item) => item.id === projectId) : null;
+      if (projectId && !targetProject) {
+        setToast("这个项目已不可用，请刷新项目列表后重试");
+        return;
+      }
+      if (targetProject && targetProject.id !== project?.id) {
+        await openProject(targetProject.workspace_root, false);
+      }
+      setMode(targetProject ? "project" : "chat");
       const currentModelId = conversations.find((item) => item.id === currentId)?.model_id
         ?? modelOptions?.models.find((item) => item.available)?.id
         ?? "local:minimind-64m";
-      const data = await api.createConversation("新对话", currentModelId);
+      const data = await api.createConversation("新对话", currentModelId, targetProject?.id);
       const id = data.conversation.id;
       await refreshConversations(id);
       await loadMessages(id);
@@ -551,6 +559,7 @@ export default function App() {
         projects={projects}
         currentProjectId={project?.id ?? null}
         onCreate={() => void createConversation()}
+        onCreateProjectConversation={(projectId) => void createConversation(projectId)}
         onOpenMcpServers={() => setActivePage("mcp")}
         onSelectConversation={(id) => void selectConversation(id)}
         onDeleteConversation={(id) => void deleteConversation(id)}

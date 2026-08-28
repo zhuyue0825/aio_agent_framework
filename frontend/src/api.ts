@@ -456,10 +456,15 @@ export const api = {
     request<{ ok: true }>(`/api/v1/mcp/servers/${id}`, { method: "DELETE" }),
   listConversations: (page = 0, size = 50) =>
     request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
-  createConversation: (title = "新对话", modelId = "local:minimind-64m") =>
+  createConversation: (title = "新对话", modelId = "local:minimind-64m", projectId?: string) =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {
       method: "POST",
-      body: JSON.stringify({ title, mode: "chat", model_id: modelId }),
+      body: JSON.stringify({
+        title,
+        mode: projectId ? "project" : "chat",
+        model_id: modelId,
+        project_id: projectId ?? null,
+      }),
     }),
   updateConversationModel: (id: string, modelId: string) =>
     request<{ conversation: Conversation }>(`/api/v1/conversations/${id}/model`, {
