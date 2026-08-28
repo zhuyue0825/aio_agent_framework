@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   api,
   hasAccessToken,
@@ -27,6 +27,17 @@ import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
+const PREVIEW_WIDTH_STORAGE_KEY = "aio-agent-preview-width";
+const DEFAULT_PREVIEW_WIDTH = 560;
+const MIN_PREVIEW_WIDTH = 320;
+const MAX_PREVIEW_WIDTH = 960;
+const MIN_CHAT_WIDTH = 440;
+const PREVIEW_RESIZER_WIDTH = 8;
+
+function initialPreviewWidth() {
+  const stored = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY));
+  return Number.isFinite(stored) && stored >= MIN_PREVIEW_WIDTH ? stored : DEFAULT_PREVIEW_WIDTH;
+}
 
 function progressText(event: RunEvent) {
   const step = typeof event.payload.step === "number" ? `第 ${event.payload.step} 步` : "";
@@ -84,7 +95,55 @@ export default function App() {
   const [proposalRun, setProposalRun] = useState<AgentRun | null>(null);
   const [proposalBusy, setProposalBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(initialPreviewWidth);
+  const appRef = useRef<HTMLDivElement | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
+  const previewResizeCleanupRef = useRef<(() => void) | null>(null);
+
+  function previewWidthLimit() {
+    const appWidth = appRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    const sidebarWidth = appRef.current?.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width ?? 280;
+    return Math.max(MIN_PREVIEW_WIDTH, Math.min(MAX_PREVIEW_WIDTH, appWidth - sidebarWidth - MIN_CHAT_WIDTH - PREVIEW_RESIZER_WIDTH));
+  }
+
+  function resizePreview(width: number) {
+    const nextWidth = Math.round(Math.min(previewWidthLimit(), Math.max(MIN_PREVIEW_WIDTH, width)));
+    setPreviewWidth(nextWidth);
+    window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(nextWidth));
+  }
+
+  function startPreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    previewResizeCleanupRef.current?.();
+
+    const startX = event.clientX;
+    const previewPanel = event.currentTarget.nextElementSibling as HTMLElement | null;
+    const startWidth = previewPanel?.getBoundingClientRect().width ?? previewWidth;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      resizePreview(startWidth + startX - moveEvent.clientX);
+    };
+    const stopResize = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      document.body.classList.remove("preview-resizing");
+      previewResizeCleanupRef.current = null;
+    };
+
+    document.body.classList.add("preview-resizing");
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    previewResizeCleanupRef.current = stopResize;
+  }
+
+  function handlePreviewResizeKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    resizePreview(previewWidth + (event.key === "ArrowLeft" ? 32 : -32));
+  }
 
   async function refreshModelOptions() {
     const options = await api.modelOptions();
@@ -232,6 +291,24 @@ export default function App() {
       }
     })();
     return () => window.removeEventListener("aio-agent-auth-expired", expireSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const keepPreviewInsideViewport = () => {
+      setPreviewWidth((currentWidth) => {
+        const nextWidth = Math.round(Math.min(previewWidthLimit(), Math.max(MIN_PREVIEW_WIDTH, currentWidth)));
+        window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(nextWidth));
+        return nextWidth;
+      });
+    };
+    keepPreviewInsideViewport();
+    window.addEventListener("resize", keepPreviewInsideViewport);
+    return () => {
+      window.removeEventListener("resize", keepPreviewInsideViewport);
+      previewResizeCleanupRef.current?.();
+    };
+    // Layout refs remain stable; the resize callback reads their current dimensions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -435,7 +512,11 @@ export default function App() {
   const currentConversation = conversations.find((item) => item.id === currentId) ?? null;
 
   return (
-    <div className={`app ${activePage === "mcp" ? "mcp-mode" : mode === "project" ? "project-mode" : "chat-mode"} ${selectedFile ? "has-preview" : ""}`}>
+    <div
+      ref={appRef}
+      className={`app ${activePage === "mcp" ? "mcp-mode" : mode === "project" ? "project-mode" : "chat-mode"} ${mode === "project" && selectedFile ? "has-preview" : ""}`}
+      style={{ "--preview-width": `${previewWidth}px` } as CSSProperties}
+    >
       <Sidebar
         activePage={activePage}
         mode={mode}
@@ -474,25 +555,38 @@ export default function App() {
             canManageModel={user.role === "ADMIN"}
             onLogout={() => void logout()}
             onCancel={() => void cancelActiveRun()}
-            onModeChange={(nextMode) => {
-              setActivePage("agent");
-              setMode(nextMode);
-            }}
             onOpenFolder={() => setFolderPickerOpen(true)}
             onOpenModelSettings={() => setModelSettingsOpen(true)}
             onModelChange={selectConversationModel}
             onSend={send}
           />
-          {mode === "project" ? (
-            <CodePreview
-              file={selectedFile}
-              workspaceName={workspace?.name ?? null}
-              modified={Boolean(selectedFile && modifiedFiles.includes(selectedFile.path))}
-              saving={savingFile}
-              onRefresh={() => selectedFile && void selectFile(selectedFile.path)}
-              onClose={() => setSelectedFile(null)}
-              onSave={saveFile}
-            />
+          {mode === "project" && selectedFile ? (
+            <>
+              <div
+                className="preview-resizer"
+                role="separator"
+                aria-label="调整代码预览宽度"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_PREVIEW_WIDTH}
+                aria-valuemax={MAX_PREVIEW_WIDTH}
+                aria-valuenow={previewWidth}
+                tabIndex={0}
+                title="拖动调整代码预览宽度，双击恢复默认宽度"
+                onDoubleClick={() => resizePreview(DEFAULT_PREVIEW_WIDTH)}
+                onKeyDown={handlePreviewResizeKey}
+                onPointerDown={startPreviewResize}
+              >
+                <span />
+              </div>
+              <CodePreview
+                file={selectedFile}
+                modified={modifiedFiles.includes(selectedFile.path)}
+                saving={savingFile}
+                onRefresh={() => void selectFile(selectedFile.path)}
+                onClose={() => setSelectedFile(null)}
+                onSave={saveFile}
+              />
+            </>
           ) : null}
         </>
       )}

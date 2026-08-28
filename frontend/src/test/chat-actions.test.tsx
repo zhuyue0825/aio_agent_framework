@@ -67,7 +67,6 @@ it("sends a chat message and exposes cancellation for an active run", async () =
     canManageModel: true,
     onLogout: vi.fn(),
     onCancel: cancel,
-    onModeChange: vi.fn(),
     onOpenFolder: vi.fn(),
     onOpenModelSettings: vi.fn(),
     onModelChange: changeModel,
@@ -103,7 +102,6 @@ it("lets a regular user choose DeepSeek for the current conversation without exp
       canManageModel={false}
       onLogout={vi.fn()}
       onCancel={vi.fn()}
-      onModeChange={vi.fn()}
       onOpenFolder={vi.fn()}
       onOpenModelSettings={vi.fn()}
       onModelChange={changeModel}

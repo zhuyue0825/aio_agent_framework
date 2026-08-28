@@ -84,7 +84,11 @@ button.primary:hover {
 }
 
 .app.project-mode {
-  grid-template-columns: 280px minmax(440px, 1fr) minmax(390px, 42vw);
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.app.project-mode.has-preview {
+  grid-template-columns: 280px minmax(440px, 1fr) 8px minmax(320px, var(--preview-width));
 }
 
 .app.mcp-mode {
@@ -497,43 +501,18 @@ button.primary:hover {
   padding: 10px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   border-bottom: 1px solid var(--line);
 }
 
-.mode-control {
-  height: 38px;
-  padding: 3px;
-  display: inline-flex;
-  gap: 3px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #f4f6f8;
-}
-
-.mode-control button {
-  height: 30px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-color: transparent;
-  background: transparent;
-}
-
-.mode-control button.active {
-  border-color: var(--line);
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(20, 27, 36, 0.08);
-}
-
 .topbar-context {
+  flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .model-switch-button {
@@ -611,6 +590,7 @@ button.primary:hover {
 }
 
 .signed-in-user {
+  margin-left: auto;
   max-width: 120px;
   padding-left: 9px;
   overflow: hidden;
@@ -667,8 +647,7 @@ button.primary:hover {
   text-align: center;
 }
 
-.empty-icon,
-.preview-empty-icon {
+.empty-icon {
   width: 44px;
   height: 44px;
   display: grid;
@@ -1060,6 +1039,43 @@ input:focus {
   background: #fbfcfd;
 }
 
+.preview-resizer {
+  position: relative;
+  z-index: 2;
+  width: 8px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  cursor: col-resize;
+  touch-action: none;
+  background: #fff;
+  outline: none;
+}
+
+.preview-resizer span {
+  width: 1px;
+  height: 100%;
+  background: var(--line);
+  transition: width 120ms ease, background-color 120ms ease;
+}
+
+.preview-resizer:hover span,
+.preview-resizer:focus-visible span,
+body.preview-resizing .preview-resizer span {
+  width: 2px;
+  background: var(--primary);
+}
+
+.preview-resizer + .preview-panel {
+  border-left: 0;
+}
+
+body.preview-resizing,
+body.preview-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .preview-header {
   height: 64px;
   flex: 0 0 64px;
@@ -1176,25 +1192,6 @@ input:focus {
 .code-editor:focus {
   border: 0;
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.16);
-}
-
-.preview-empty {
-  flex: 1;
-  padding: 24px;
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 9px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.preview-empty strong {
-  color: var(--text);
-}
-
-.preview-empty span {
-  max-width: 320px;
 }
 
 .dialog-backdrop {
@@ -2070,11 +2067,33 @@ input:focus {
 
 @media (max-width: 1180px) {
   .app.project-mode {
-    grid-template-columns: 230px minmax(400px, 1fr) 360px;
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+
+  .app.project-mode.has-preview {
+    grid-template-columns: 230px minmax(400px, 1fr) 8px minmax(320px, var(--preview-width));
   }
 
   .prompt-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1024px) {
+  .app.project-mode,
+  .app.project-mode.has-preview {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .project-mode.has-preview .preview-panel {
+    position: fixed;
+    inset: 0 0 0 220px;
+    z-index: 10;
+    border-left: 1px solid var(--line);
+  }
+
+  .project-mode.has-preview .preview-resizer {
+    display: none;
   }
 }
 
@@ -2087,21 +2106,6 @@ input:focus {
   .chat-mode .sidebar,
   .mcp-mode .sidebar {
     display: none;
-  }
-
-  .app.project-mode {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-
-  .project-mode:not(.has-preview) .preview-panel {
-    display: none;
-  }
-
-  .project-mode.has-preview .preview-panel {
-    position: fixed;
-    inset: 0 0 0 220px;
-    z-index: 10;
-    border-left: 1px solid var(--line);
   }
 
   .hint {
@@ -2133,10 +2137,6 @@ input:focus {
 
   .topbar {
     padding: 9px 10px;
-  }
-
-  .mode-control button {
-    padding: 0 7px;
   }
 
   .topbar-service-context,

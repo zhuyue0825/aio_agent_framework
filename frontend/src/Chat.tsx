@@ -18,7 +18,6 @@ type ChatProps = {
   canManageModel: boolean;
   onLogout: () => void;
   onCancel: () => void;
-  onModeChange: (mode: AppMode) => void;
   onOpenFolder: () => void;
   onOpenModelSettings: () => void;
   onModelChange: (modelId: string) => Promise<void>;
@@ -52,7 +51,6 @@ export default function Chat({
   canManageModel,
   onLogout,
   onCancel,
-  onModeChange,
   onOpenFolder,
   onOpenModelSettings,
   onModelChange,
@@ -83,16 +81,6 @@ export default function Chat({
   return (
     <main className="chat-shell">
       <header className="topbar">
-        <div className="mode-control" aria-label="工作模式">
-          <button disabled={busy} className={mode === "chat" ? "active" : ""} onClick={() => onModeChange("chat")}>
-            <MessageSquare size={16} />
-            纯对话
-          </button>
-          <button disabled={busy} className={mode === "project" ? "active" : ""} onClick={() => onModeChange("project")}>
-            <FolderCode size={16} />
-            项目工作
-          </button>
-        </div>
         <div className="topbar-context">
           <label
             className="conversation-model-control"
