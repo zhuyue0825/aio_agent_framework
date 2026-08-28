@@ -186,13 +186,13 @@ test("uses project selection as context and shows a resizable preview only for a
 
   await expect(page.getByRole("button", { name: "纯对话" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "项目工作" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "aio-project" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "保留的最近对话" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "aio-project", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保留的最近对话", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "aio-project" }).click();
+  await page.getByRole("button", { name: "aio-project", exact: true }).click();
   await expect(page.locator(".app")).toHaveClass(/project-mode/);
-  await expect(page.getByRole("button", { name: "aio-project" })).toHaveClass(/active/);
-  await expect(page.getByRole("button", { name: "保留的最近对话" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "aio-project 项目" })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "保留的最近对话", exact: true })).toBeVisible();
   await expect(page.locator(".file-tree")).toHaveCount(0);
   await expect(page.locator(".preview-panel")).toHaveCount(0);
   await expect(page.getByRole("separator", { name: "调整代码预览宽度" })).toHaveCount(0);
@@ -222,7 +222,7 @@ test("uses project selection as context and shows a resizable preview only for a
   await expect(preview).toHaveCount(0);
   await expect(resizer).toHaveCount(0);
 
-  await page.getByRole("button", { name: "保留的最近对话" }).click();
+  await page.getByRole("button", { name: "保留的最近对话", exact: true }).click();
   await expect(page.locator(".app")).toHaveClass(/chat-mode/);
-  await expect(page.getByRole("button", { name: "aio-project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "aio-project", exact: true })).toBeVisible();
 });

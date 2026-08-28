@@ -203,13 +203,32 @@ button.primary:hover {
   font-weight: 500;
 }
 
+.sidebar-scroll-region {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
 .sidebar-project-list {
   padding: 0 9px 7px;
   display: grid;
   gap: 2px;
 }
 
-.sidebar-project-list > button {
+.sidebar-project-group {
+  display: grid;
+  gap: 1px;
+}
+
+.sidebar-project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 2px;
+  align-items: center;
+  border-radius: 7px;
+}
+
+.sidebar-project-main {
   width: 100%;
   height: 36px;
   padding: 0 9px;
@@ -223,20 +242,54 @@ button.primary:hover {
   text-align: left;
 }
 
-.sidebar-project-list > button span {
+.sidebar-project-main span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-project-list > button:hover {
+.sidebar-project-row:hover,
+.sidebar-project-group.active > .sidebar-project-row {
   background: #1f23290a;
 }
 
-.sidebar-project-list > button.active {
+.sidebar-project-group.active > .sidebar-project-row {
   color: var(--text);
   background: #1f23290d;
   font-weight: 500;
+}
+
+.project-new-conversation {
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.sidebar-project-row:hover .project-new-conversation,
+.sidebar-project-row:focus-within .project-new-conversation,
+.sidebar-project-group.active .project-new-conversation {
+  opacity: 1;
+}
+
+.project-conversation-list {
+  margin: 0 0 4px 19px;
+  padding-left: 6px;
+  border-left: 1px solid #dfe3e8;
+}
+
+.project-conversation-list .conversation-item.compact {
+  margin: 0;
+}
+
+.project-conversation-list .conversation-main {
+  min-height: 38px;
+  padding: 4px 6px;
+}
+
+.project-conversation-list .icon-button {
+  width: 28px;
+  height: 28px;
 }
 
 .sidebar-project-empty {
@@ -330,9 +383,14 @@ button.primary:hover {
 }
 
 .conversation-list {
-  flex: 1;
   padding: 0 8px 12px;
-  overflow: auto;
+}
+
+.sidebar-conversation-empty {
+  display: block;
+  padding: 5px 11px 12px;
+  color: #9aa2af;
+  font-size: 11px;
 }
 
 .conversation-item {
