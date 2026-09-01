@@ -267,10 +267,6 @@ button.primary:hover {
   font-weight: 500;
 }
 
-.sidebar-project-group.unavailable .sidebar-project-main {
-  color: #8b5e00;
-}
-
 .project-folder-loading {
   animation: project-folder-pulse 900ms ease-in-out infinite alternate;
 }

@@ -67,12 +67,12 @@ it("groups project conversations under their project and keeps standalone chats 
   expect(createProjectConversation).toHaveBeenCalledWith(project.id);
 });
 
-it("marks a project that is unavailable in the current deployment", () => {
+it("hides an unavailable project and keeps its conversations accessible in recent conversations", () => {
   render(
     <Sidebar
       activePage="agent"
       mode="chat"
-      conversations={[]}
+      conversations={[conversation("unavailable-project-conversation", "保留的历史对话", project.id)]}
       currentId={null}
       projects={[project]}
       currentProjectId={null}
@@ -88,9 +88,7 @@ it("marks a project that is unavailable in the current deployment", () => {
     />,
   );
 
-  expect(screen.getByText("不可用")).toBeVisible();
-  expect(within(screen.getByRole("region", { name: "aio-project 项目" })).getByTitle(/当前部署不可用/)).toHaveAttribute(
-    "title",
-    "/workspaces/aio-project（当前部署不可用）",
-  );
+  expect(screen.queryByRole("region", { name: "aio-project 项目" })).not.toBeInTheDocument();
+  expect(screen.queryByText("不可用")).not.toBeInTheDocument();
+  expect(within(screen.getByRole("list", { name: "最近对话" })).getByRole("button", { name: "保留的历史对话" })).toBeVisible();
 });

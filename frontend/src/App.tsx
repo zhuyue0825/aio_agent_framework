@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  ApiError,
   api,
   hasAccessToken,
   isTerminalRun,
@@ -27,6 +28,7 @@ import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
+const UNAVAILABLE_PROJECTS_STORAGE_KEY = "aio-agent-unavailable-projects";
 const PREVIEW_WIDTH_STORAGE_KEY = "aio-agent-preview-width";
 const DEFAULT_PREVIEW_WIDTH = 560;
 const MIN_PREVIEW_WIDTH = 320;
@@ -37,6 +39,19 @@ const PREVIEW_RESIZER_WIDTH = 8;
 function initialPreviewWidth() {
   const stored = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY));
   return Number.isFinite(stored) && stored >= MIN_PREVIEW_WIDTH ? stored : DEFAULT_PREVIEW_WIDTH;
+}
+
+function storedUnavailableProjectIds() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(UNAVAILABLE_PROJECTS_STORAGE_KEY) ?? "[]");
+    return new Set<string>(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function persistUnavailableProjectIds(projectIds: Set<string>) {
+  window.localStorage.setItem(UNAVAILABLE_PROJECTS_STORAGE_KEY, JSON.stringify(Array.from(projectIds)));
 }
 
 function progressText(event: RunEvent) {
@@ -85,7 +100,7 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
-  const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(() => new Set());
+  const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(storedUnavailableProjectIds);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -184,6 +199,7 @@ export default function App() {
       if (!current.has(projectId)) return current;
       const next = new Set(current);
       next.delete(projectId);
+      persistUnavailableProjectIds(next);
       return next;
     });
   }
@@ -193,8 +209,23 @@ export default function App() {
       if (current.has(projectId)) return current;
       const next = new Set(current);
       next.add(projectId);
+      persistUnavailableProjectIds(next);
       return next;
     });
+  }
+
+  async function discoverUnavailableProjects(candidateProjects: Project[]) {
+    await Promise.all(candidateProjects.map(async (candidate) => {
+      try {
+        const data = await api.workspaceTree(candidate.id);
+        rememberWorkspace(candidate.id, data.workspace);
+        clearProjectUnavailable(candidate.id);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
+          markProjectUnavailable(candidate.id);
+        }
+      }
+    }));
   }
 
   async function openProject(path: string, switchMode = true) {
@@ -241,7 +272,9 @@ export default function App() {
       return true;
     } catch (err) {
       if (requestId !== projectSelectionRequestRef.current) return false;
-      markProjectUnavailable(targetProject.id);
+      if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
+        markProjectUnavailable(targetProject.id);
+      }
       setProject(previousProject);
       setWorkspace(previousWorkspace);
       const reason = err instanceof Error ? err.message : String(err);
@@ -310,6 +343,7 @@ export default function App() {
     const id = await refreshConversations();
     await loadMessages(id);
     const loadedProjects = await refreshProjects();
+    void discoverUnavailableProjects(loadedProjects);
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
@@ -336,7 +370,7 @@ export default function App() {
     setProject(null);
     setWorkspace(null);
     setProjectLoadingId(null);
-    setUnavailableProjectIds(new Set());
+    setUnavailableProjectIds(storedUnavailableProjectIds());
     workspaceCacheRef.current.clear();
     projectSelectionRequestRef.current += 1;
     setSelectedFile(null);
@@ -440,6 +474,13 @@ export default function App() {
 
     setMode(conversation.mode);
     if (conversation.mode !== "project" || !conversation.project_id || conversation.project_id === project?.id) return;
+
+    if (unavailableProjectIds.has(conversation.project_id)) {
+      setProject(null);
+      setWorkspace(null);
+      setToast("这个对话原来关联的项目当前不可用；历史消息仍可查看，重新打开文件夹后可以继续工作");
+      return;
+    }
 
     let targetProject = projects.find((item) => item.id === conversation.project_id);
     if (!targetProject) {
