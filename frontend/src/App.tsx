@@ -28,7 +28,6 @@ import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
-const UNAVAILABLE_PROJECTS_STORAGE_KEY = "aio-agent-unavailable-projects";
 const PREVIEW_WIDTH_STORAGE_KEY = "aio-agent-preview-width";
 const DEFAULT_PREVIEW_WIDTH = 560;
 const MIN_PREVIEW_WIDTH = 320;
@@ -39,19 +38,6 @@ const PREVIEW_RESIZER_WIDTH = 8;
 function initialPreviewWidth() {
   const stored = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY));
   return Number.isFinite(stored) && stored >= MIN_PREVIEW_WIDTH ? stored : DEFAULT_PREVIEW_WIDTH;
-}
-
-function storedUnavailableProjectIds() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(UNAVAILABLE_PROJECTS_STORAGE_KEY) ?? "[]");
-    return new Set<string>(Array.isArray(stored) ? stored.filter((value): value is string => typeof value === "string") : []);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function persistUnavailableProjectIds(projectIds: Set<string>) {
-  window.localStorage.setItem(UNAVAILABLE_PROJECTS_STORAGE_KEY, JSON.stringify(Array.from(projectIds)));
 }
 
 function progressText(event: RunEvent) {
@@ -100,7 +86,9 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
-  const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(storedUnavailableProjectIds);
+  // Availability belongs to the current runtime session. Persisting failures
+  // would keep a valid project hidden after the Agent service or mount recovers.
+  const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(() => new Set());
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -199,7 +187,6 @@ export default function App() {
       if (!current.has(projectId)) return current;
       const next = new Set(current);
       next.delete(projectId);
-      persistUnavailableProjectIds(next);
       return next;
     });
   }
@@ -209,7 +196,6 @@ export default function App() {
       if (current.has(projectId)) return current;
       const next = new Set(current);
       next.add(projectId);
-      persistUnavailableProjectIds(next);
       return next;
     });
   }
@@ -370,7 +356,7 @@ export default function App() {
     setProject(null);
     setWorkspace(null);
     setProjectLoadingId(null);
-    setUnavailableProjectIds(storedUnavailableProjectIds());
+    setUnavailableProjectIds(new Set());
     workspaceCacheRef.current.clear();
     projectSelectionRequestRef.current += 1;
     setSelectedFile(null);
