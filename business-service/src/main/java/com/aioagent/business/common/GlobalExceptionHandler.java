@@ -70,6 +70,9 @@ public class GlobalExceptionHandler {
                         ? exception.getClass().getSimpleName()
                         : exception.getCause().getClass().getSimpleName())
                 .log("internal_agent_service_request_failed");
+        if ("WORKSPACE_ERROR".equals(exception.getErrorCode())) {
+            return response(HttpStatus.BAD_REQUEST, "WORKSPACE_ERROR", "工作区目录不存在或当前部署无法访问", List.of());
+        }
         return response(HttpStatus.BAD_GATEWAY, "AGENT_SERVICE_UNAVAILABLE", "Agent 服务暂时不可用，请稍后重试", List.of());
     }
 

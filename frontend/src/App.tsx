@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  ApiError,
   api,
   hasAccessToken,
   isTerminalRun,
@@ -85,6 +86,8 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
+  // Availability belongs to the current runtime session. Persisting failures
+  // would keep a valid project hidden after the Agent service or mount recovers.
   const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(() => new Set());
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
@@ -197,6 +200,20 @@ export default function App() {
     });
   }
 
+  async function discoverUnavailableProjects(candidateProjects: Project[]) {
+    await Promise.all(candidateProjects.map(async (candidate) => {
+      try {
+        const data = await api.workspaceTree(candidate.id);
+        rememberWorkspace(candidate.id, data.workspace);
+        clearProjectUnavailable(candidate.id);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
+          markProjectUnavailable(candidate.id);
+        }
+      }
+    }));
+  }
+
   async function openProject(path: string, switchMode = true) {
     const requestId = ++projectSelectionRequestRef.current;
     setProjectLoadingId(null);
@@ -241,7 +258,9 @@ export default function App() {
       return true;
     } catch (err) {
       if (requestId !== projectSelectionRequestRef.current) return false;
-      markProjectUnavailable(targetProject.id);
+      if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
+        markProjectUnavailable(targetProject.id);
+      }
       setProject(previousProject);
       setWorkspace(previousWorkspace);
       const reason = err instanceof Error ? err.message : String(err);
@@ -310,6 +329,7 @@ export default function App() {
     const id = await refreshConversations();
     await loadMessages(id);
     const loadedProjects = await refreshProjects();
+    void discoverUnavailableProjects(loadedProjects);
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
@@ -440,6 +460,13 @@ export default function App() {
 
     setMode(conversation.mode);
     if (conversation.mode !== "project" || !conversation.project_id || conversation.project_id === project?.id) return;
+
+    if (unavailableProjectIds.has(conversation.project_id)) {
+      setProject(null);
+      setWorkspace(null);
+      setToast("这个对话原来关联的项目当前不可用；历史消息仍可查看，重新打开文件夹后可以继续工作");
+      return;
+    }
 
     let targetProject = projects.find((item) => item.id === conversation.project_id);
     if (!targetProject) {

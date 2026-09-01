@@ -179,6 +179,9 @@ test("uses project selection as context and shows a resizable preview only for a
     return route.fulfill({ status: 404, json: { error: { code: "NOT_MOCKED", message: path } } });
   });
 
+  await page.addInitScript((projectId) => {
+    window.localStorage.setItem("aio-agent-unavailable-projects", JSON.stringify([projectId]));
+  }, project.id);
   await page.goto("/");
   await page.getByLabel("用户名").fill("admin");
   await page.getByLabel("密码").fill("password-1234");
