@@ -300,7 +300,7 @@ async function request<T>(url: string, options?: RequestInit, authenticated = tr
     ...options,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(options?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(authenticated ? authenticationHeaders() : {}),
       ...(options?.headers || {}),
     },
@@ -456,10 +456,15 @@ export const api = {
     request<{ ok: true }>(`/api/v1/mcp/servers/${id}`, { method: "DELETE" }),
   listConversations: (page = 0, size = 50) =>
     request<ConversationPage>(`/api/v1/conversations?page=${page}&size=${size}`),
-  createConversation: (title = "新对话", modelId = "local:minimind-64m") =>
+  createConversation: (title = "新对话", modelId = "local:minimind-64m", projectId?: string) =>
     request<{ conversation: Conversation }>("/api/v1/conversations", {
       method: "POST",
-      body: JSON.stringify({ title, mode: "chat", model_id: modelId }),
+      body: JSON.stringify({
+        title,
+        mode: projectId ? "project" : "chat",
+        model_id: modelId,
+        project_id: projectId ?? null,
+      }),
     }),
   updateConversationModel: (id: string, modelId: string) =>
     request<{ conversation: Conversation }>(`/api/v1/conversations/${id}/model`, {
@@ -470,7 +475,7 @@ export const api = {
     request<{ ok: true }>(`/api/v1/conversations/${id}`, { method: "DELETE" }),
   listMessages: (conversationId: string, page = 0, size = 100) =>
     request<MessagePage>(`/api/v1/conversations/${conversationId}/messages?page=${page}&size=${size}`),
-  createRun: (conversationId: string, task: string, mode: AppMode, projectId?: string) =>
+  createRun: (conversationId: string, task: string, mode: AppMode, projectId?: string, materials?: MaterialSelection) =>
     request<{ run: AgentRun }>(`/api/v1/conversations/${conversationId}/runs`, {
       method: "POST",
       headers: { "Idempotency-Key": `${conversationId}-${Date.now()}-${Math.random().toString(36).slice(2)}` },
@@ -480,8 +485,18 @@ export const api = {
         project_id: projectId,
         approval_mode: "auto",
         max_history_messages: 8,
+        attachment_ids: materials?.attachment_ids ?? [],
+        knowledge_ids: materials?.knowledge_ids ?? [],
       }),
     }),
+  knowledgeBases: () => request<{knowledge_bases: KnowledgeBase[]}>("/api/v1/knowledge-bases"),
+  selectedKnowledge: (id: string) => request<{knowledge_ids: string[]}>(`/api/v1/conversations/${id}/knowledge`),
+  selectKnowledge: (id: string, knowledge_ids: string[]) => request(`/api/v1/conversations/${id}/knowledge`, {method:"PUT",body:JSON.stringify({knowledge_ids})}),
+  uploadAttachment: (id: string, file: File) => { const body = new FormData(); body.append("file", file); return request<Attachment>(`/api/v1/conversations/${id}/attachments`, {method:"POST",body}); },
+  referenceAttachment: (id: string, project_id: string, path: string) => request<Attachment>(`/api/v1/conversations/${id}/attachments/reference`, {method:"POST",body:JSON.stringify({project_id,path})}),
+  retryAttachment: (id: string, attachment: string) => request<Attachment>(`/api/v1/conversations/${id}/attachments/${attachment}/retry`, {method:"POST",body:"{}"}),
+  attachment: (id: string, attachment: string) => request<Attachment>(`/api/v1/conversations/${id}/attachments/${attachment}`),
+  knowledgeDocument: (id: string) => request<{name: string; segments: SourceSegment[]}>(`/api/v1/knowledge-bases/duretrieval/documents/${encodeURIComponent(id)}`),
   getRun: (runId: string) => request<{ run: AgentRun }>(`/api/v1/runs/${runId}`),
   listRunEvents: (runId: string, after = 0, size = 100) =>
     request<{ events: RunEvent[]; has_more: boolean; next_after: number }>(
@@ -514,3 +529,9 @@ export const api = {
       body: JSON.stringify({ path, content }),
     }),
 };
+
+export type SourceSegment = {id: string; text: string; location: string};
+export type Attachment = {id: string; name: string; status: string; source_kind: string; source_path: string; error_message: string; segments?: SourceSegment[]};
+export type KnowledgeBase = {id: string; name: string; description: string; available: boolean};
+export type MaterialSelection = {attachment_ids: string[]; knowledge_ids: string[]};
+export type Evidence = {evidence_id: string; kind: string; name: string; text: string; location: string; chunk_id: string; attachment_id?: string; document_id?: string; path?: string; cited?: boolean};

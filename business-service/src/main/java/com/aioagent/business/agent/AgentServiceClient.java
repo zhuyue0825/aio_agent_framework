@@ -54,6 +54,10 @@ public class AgentServiceClient {
                 .build();
     }
 
+    public Map<String,Object> parseAttachment(String name, byte[] content) {
+        return postMap("/internal/v1/attachments/parse", Map.of("name",name,"data_base64",java.util.Base64.getEncoder().encodeToString(content)));
+    }
+
     public HealthResponse health() {
         try {
             return client.get()
@@ -318,7 +322,8 @@ public class AgentServiceClient {
             UUID requestedById,
             UUID workspaceOwnerId,
             List<McpServerConfig> mcpServers,
-            String callbackUrl) {
+            String callbackUrl,
+            Map<String,Object> materials) {
         public ExecutionRequest {
             history = history == null ? List.of() : history;
             mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
@@ -336,8 +341,14 @@ public class AgentServiceClient {
             int modelRequestCount,
             Long inputTokens,
             Long outputTokens,
-            long modelLatencyMs) {
+            long modelLatencyMs,
+            List<Map<String,Object>> sources, List<Map<String,Object>> retrievals) {
+        public ExecutionResponse(String finalAnswer,int steps,List<String> changedFiles,List<Map<String,Object>> proposedChanges,String traceId,String modelProvider,String modelName,int modelRequestCount,Long inputTokens,Long outputTokens,long modelLatencyMs) {
+            this(finalAnswer,steps,changedFiles,proposedChanges,traceId,modelProvider,modelName,modelRequestCount,inputTokens,outputTokens,modelLatencyMs,List.of(),List.of());
+        }
         public ExecutionResponse {
+            sources = sources == null ? List.of() : sources;
+            retrievals = retrievals == null ? List.of() : retrievals;
             changedFiles = changedFiles == null ? List.of() : changedFiles;
             proposedChanges = proposedChanges == null ? List.of() : proposedChanges;
         }

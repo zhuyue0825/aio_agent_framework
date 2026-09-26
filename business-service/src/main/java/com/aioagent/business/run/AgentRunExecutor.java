@@ -56,7 +56,8 @@ public class AgentRunExecutor {
                     prepared.requestedById(),
                     prepared.workspaceOwnerId(),
                     prepared.mcpServers(),
-                    agentService.callbackUrl(runId));
+                    agentService.callbackUrl(runId),
+                    prepared.materials());
             runs.complete(runId, agentService.execute(request));
         } catch (AgentServiceException exception) {
             log.atWarn()

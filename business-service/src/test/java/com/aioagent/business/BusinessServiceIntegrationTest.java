@@ -135,12 +135,36 @@ class BusinessServiceIntegrationTest {
     @MockitoBean
     AgentServiceClient agentService;
 
+    @Autowired
+    com.aioagent.business.material.MaterialService materials;
+
+    @Test
+    void materialsEnforceConversationAndUserScopeAndRetryFailedParsing() {
+        UserAccount owner = authService.register("material-owner", "password-1234").user();
+        UserAccount other = authService.register("material-other", "password-1234").user();
+        Conversation conversation = conversations.create(owner, "附件测试", null, ConversationMode.CHAT);
+        Conversation another = conversations.create(owner, "另一个对话", null, ConversationMode.CHAT);
+        when(agentService.parseAttachment(anyString(), any(byte[].class))).thenThrow(new IllegalStateException("temporary parser failure"));
+        var failed = materials.upload(owner, conversation.getId(), "facts.txt", new byte[]{65});
+        UUID id = UUID.fromString(failed.get("id").toString());
+        assertThat(failed.get("status")).isEqualTo("FAILED");
+        assertThatThrownBy(() -> materials.snapshot(owner, conversation.getId(), List.of(id), List.of())).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> materials.attachment(other, conversation.getId(), id, true)).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> materials.attachment(owner, another.getId(), id, true)).isInstanceOf(ApiException.class);
+        when(agentService.parseAttachment(anyString(), any(byte[].class))).thenReturn(Map.of("segments", List.of(Map.of("id","s1","text","A","location","第1行"))));
+        assertThat(materials.retry(owner, conversation.getId(), id).get("status")).isEqualTo("READY");
+        var snapshot = materials.snapshot(owner, conversation.getId(), List.of(id), List.of("duretrieval"));
+        assertThat(materials.selected(owner, conversation.getId())).containsExactly("duretrieval");
+        assertThat(materials.execution(owner, conversation.getId(), materials.json(snapshot)).get("attachments")).asList().hasSize(1);
+        assertThatThrownBy(() -> materials.select(owner, conversation.getId(), List.of("unauthorized"))).isInstanceOf(ApiException.class);
+    }
+
     @Test
     void flywayCreatesSchemaAndSecurityIssuesJwt() throws Exception {
         Integer migrationCount = jdbcTemplate.queryForObject(
                 "select count(*) from flyway_schema_history where success = true",
                 Integer.class);
-        assertThat(migrationCount).isEqualTo(9);
+        assertThat(migrationCount).isEqualTo(10);
         assertThat(restClientBuilder).isNotNull();
         assertThat(users.findByUsernameIgnoreCase("integration-admin")).isPresent();
 

@@ -82,7 +82,8 @@ public class AgentRunController {
                 request.approvalMode(),
                 request.maxHistoryMessages(),
                 idempotencyKey,
-                traceId);
+                traceId,
+                request.attachmentIds(), request.knowledgeIds());
         if (result.created()) {
             recovery.submit(result.run().getId());
         }
@@ -173,8 +174,12 @@ public class AgentRunController {
             @Size(max = 20) String mode,
             UUID projectId,
             @Size(max = 20) String approvalMode,
-            @Min(0) @Max(30) int maxHistoryMessages) {
+            @Min(0) @Max(30) int maxHistoryMessages,
+            @Size(max=5) java.util.List<UUID> attachmentIds,
+            @Size(max=1) java.util.List<String> knowledgeIds) {
         public CreateRunRequest {
+            attachmentIds = attachmentIds == null ? java.util.List.of() : attachmentIds;
+            knowledgeIds = knowledgeIds == null ? java.util.List.of() : knowledgeIds;
             if (mode == null) {
                 mode = "chat";
             }

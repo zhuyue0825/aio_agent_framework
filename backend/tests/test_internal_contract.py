@@ -41,7 +41,7 @@ def test_agent_run_accepts_history_and_propagates_trace_id() -> None:
         response = client.post("/internal/v1/agent/runs", json=request, headers=AUTH_HEADERS)
 
     assert response.status_code == 200
-    assert response.json() == {**result, "trace_id": "trace-contract-001"}
+    assert response.json() == {**result, "trace_id": "trace-contract-001", "sources": [], "retrievals": []}
     args = run_plain_chat.call_args.args
     assert args[0] == "继续回答"
     assert [(message.role, message.content) for message in args[1]] == [("user", "上一轮问题")]
