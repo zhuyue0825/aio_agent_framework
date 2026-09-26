@@ -221,7 +221,8 @@ def test_project_run_passes_trimmed_history_and_task_to_runtime(tmp_path: Path) 
     assert result["final_answer"] == "完成"
 
 
-def test_frontend_test_tool_installs_locked_dependencies_without_scripts(tmp_path: Path) -> None:
+def test_frontend_test_tool_installs_locked_dependencies_without_scripts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("backend.workspace.shutil.which", lambda name: "/usr/bin/" + name)
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "package.json").write_text(

@@ -1,7 +1,9 @@
 import { Cloud, Cpu, FolderCode, FolderOpen, LogOut, MessageSquare, Send, Settings, Square } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { AppMode, Message, ModelOptions, Status, Workspace } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AppMode, Message, ModelOptions, Status, Workspace, MaterialSelection, Evidence, Attachment } from "./api";
 import RichText from "./RichText";
+import MaterialComposer from "./MaterialComposer";
+import EvidencePanel from "./EvidencePanel";
 
 type ChatProps = {
   status: Status | null;
@@ -21,7 +23,10 @@ type ChatProps = {
   onOpenFolder: () => void;
   onOpenModelSettings: () => void;
   onModelChange: (modelId: string) => Promise<void>;
-  onSend: (task: string) => Promise<void>;
+  conversationId?: string;
+  projectId?: string;
+  liveSources?: Evidence[];
+  onSend: (task: string, materials?: MaterialSelection) => Promise<boolean | void>;
 };
 
 function roleLabel(role: Message["role"]) {
@@ -54,9 +59,16 @@ export default function Chat({
   onOpenFolder,
   onOpenModelSettings,
   onModelChange,
-  onSend,
+  onSend, conversationId = "", projectId, liveSources = [],
 }: ChatProps) {
   const [draft, setDraft] = useState("");
+  const [materials,setMaterials] = useState<MaterialSelection>({attachment_ids:[],knowledge_ids:[]});
+  const [materialBlocked,setMaterialBlocked] = useState(false);
+  const [reset,setReset] = useState(0);
+  const [source,setSource] = useState<Evidence|null>(null);
+  const closeSource=useCallback(()=>setSource(null),[]);
+  const selectMaterials=useCallback((value:MaterialSelection,blocked:boolean)=>{setMaterials(value);setMaterialBlocked(blocked);},[]);
+  function viewAttachment(a:Attachment) {setSource({evidence_id:"",kind:a.source_kind,name:a.name,text:"",location:"文件快照",path:a.source_path,chunk_id:"s1",attachment_id:a.id});}
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -65,9 +77,9 @@ export default function Chat({
 
   async function submit() {
     const task = draft.trim();
-    if (!task || busy) return;
-    setDraft("");
-    await onSend(task);
+    if (!task || busy || materialBlocked) return;
+    const accepted = await onSend(task,materials);
+    if(accepted !== false) {setDraft("");setReset(value=>value+1);}
   }
 
   const projectReady = mode === "chat" || Boolean(workspace);
@@ -146,7 +158,7 @@ export default function Chat({
               <h1>{mode === "chat" ? "开始一段对话" : workspace ? `在 ${workspace.name} 中工作` : "打开一个项目文件夹"}</h1>
               <p>
                 {mode === "chat"
-                  ? "这个模式只和模型聊天，不会读取或修改本地文件。"
+                  ? "可添加附件或选择知识库，让回答有据可查。"
                   : workspace
                     ? "Agent 可以读取和修改这个目录中的文本文件，修改结果会显示在右侧。"
                     : "选择文件夹后，可以让 Agent 阅读项目、修改代码，并在右侧预览文件。"}
@@ -179,8 +191,12 @@ export default function Chat({
                     {message.role === "user" ? (
                       <div className="content plain-text">{message.content}</div>
                     ) : (
-                      <RichText>{message.content}</RichText>
+                      <RichText sources={Array.isArray(message.metadata?.sources)?message.metadata.sources as Evidence[]:[]} onSource={setSource}>{message.content}</RichText>
                     )}
+                    {Array.isArray(message.metadata?.attachments) && <div className="message-materials">{(message.metadata.attachments as Attachment[]).map(a=><button key={a.id} onClick={()=>viewAttachment(a)}>📎 {a.name}</button>)}</div>}
+                    {Array.isArray(message.metadata?.knowledge_ids) && message.metadata.knowledge_ids.length>0 && <div className="meta">已选择：中文通用检索演示库</div>}
+                    {Array.isArray(message.metadata?.retrievals) && message.metadata.retrievals.length>0 && <details className="retrieval-record"><summary>知识库检索记录 · {message.metadata.retrievals.length} 次</summary>{(message.metadata.retrievals as {query:string;status:string;count:number;duration_ms:number}[]).map((r,i)=><div key={i}><strong>{r.query}</strong><small>{r.status==="completed"?`返回 ${r.count} 条资料`:"检索失败"} · {(r.duration_ms/1000).toFixed(2)} 秒（含问题向量化）</small></div>)}</details>}
+                    {Array.isArray(message.metadata?.sources) && message.metadata.sources.length>0 && <div className="message-sources"><small>已查阅来源 · 点击查看原文</small>{(message.metadata.sources as Evidence[]).map(s=><button key={s.evidence_id} onClick={()=>setSource(s)}>[{s.evidence_id}] {s.name} · {s.location}{s.cited?" · 已引用":""}</button>)}</div>}
                     {changedFiles.length ? (
                       <div className="changed-summary">已修改 {changedFiles.join("、")}</div>
                     ) : null}
@@ -198,7 +214,8 @@ export default function Chat({
               <div className="avatar">AI</div>
               <div className="bubble">
                 <div className="role">{progress ?? (mode === "project" ? "正在处理项目" : "正在回复")}</div>
-                {streamingText ? <RichText className="streaming-content">{streamingText}</RichText> : null}
+                {streamingText ? <RichText className="streaming-content" sources={liveSources} onSource={setSource}>{streamingText}</RichText> : null}
+                {liveSources.length>0 && <div className="message-sources"><small>本次检索 / 读取的来源</small>{liveSources.map(s=><button key={s.evidence_id} onClick={()=>setSource(s)}>[{s.evidence_id}] {s.name} · {s.location}</button>)}</div>}
                 <div className="run-progress-row">
                   <div className="typing">
                     <span />
@@ -216,7 +233,9 @@ export default function Chat({
         </div>
       </section>
 
+      {source && <EvidencePanel source={source} conversationId={conversationId} onClose={closeSource}/>}
       <footer className="composer-wrap">
+        {conversationId && <MaterialComposer conversationId={conversationId} projectId={projectId} workspace={workspace} busy={busy} reset={reset} onChange={selectMaterials}/>}
         <div className="composer">
           <textarea
             value={draft}
@@ -239,7 +258,7 @@ export default function Chat({
           <button
             className="primary send-button"
             title="发送"
-            disabled={busy || !draft.trim() || !projectReady}
+            disabled={busy || materialBlocked || !draft.trim() || !projectReady}
             onClick={() => void submit()}
           >
             <Send size={18} />
@@ -248,7 +267,7 @@ export default function Chat({
         </div>
         <div className="hint">
           <span>Enter 发送，Shift+Enter 换行</span>
-          <span>{mode === "project" ? workspace?.root ?? "未打开项目" : "纯对话不会操作文件"}</span>
+          <span>{mode === "project" ? workspace?.root ?? "未打开项目" : "附件仅用于当前对话"}</span>
         </div>
       </footer>
     </main>
