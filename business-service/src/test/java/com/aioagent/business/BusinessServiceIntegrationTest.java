@@ -819,8 +819,9 @@ class BusinessServiceIntegrationTest {
                 new com.aioagent.business.agent.AgentServiceException("missing", null, false, "WORKSPACE_ERROR"));
         mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(owner.getId().toString()))))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("WORKSPACE_ERROR"));
-        when(agentService.workspaceAvailability(root, owner.getId())).thenThrow(
-                new com.aioagent.business.agent.AgentServiceException("offline", null, false, "AGENT_SERVICE_ERROR"));
+        org.mockito.Mockito.doThrow(
+                new com.aioagent.business.agent.AgentServiceException("offline", null, false, "AGENT_SERVICE_ERROR"))
+                .when(agentService).workspaceAvailability(root, owner.getId());
         mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(owner.getId().toString()))))
                 .andExpect(status().isBadGateway());
     }
