@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  ApiError,
   api,
   hasAccessToken,
   isTerminalRun,
@@ -27,6 +28,7 @@ import FolderPicker from "./FolderPicker";
 import ModelSettingsDialog from "./ModelSettingsDialog";
 import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
+import { probeProjectAvailability } from "./projectAvailability";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
 const PREVIEW_WIDTH_STORAGE_KEY = "aio-agent-preview-width";
@@ -96,6 +98,8 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
+  // Availability belongs to the current runtime session. Persisting failures
+  // would keep a valid project hidden after the Agent service or mount recovers.
   const [unavailableProjectIds, setUnavailableProjectIds] = useState<Set<string>>(() => new Set());
   const [selectedFile, setSelectedFile] = useState<WorkspaceFile | null>(null);
   const [modifiedFiles, setModifiedFiles] = useState<string[]>([]);
@@ -114,6 +118,7 @@ export default function App() {
   const previewResizeCleanupRef = useRef<(() => void) | null>(null);
   const workspaceCacheRef = useRef<Map<string, Workspace>>(new Map());
   const projectSelectionRequestRef = useRef(0);
+  const availabilityGenerationRef = useRef(0);
 
   function previewWidthLimit() {
     const appWidth = appRef.current?.getBoundingClientRect().width ?? window.innerWidth;
@@ -230,6 +235,7 @@ export default function App() {
 
   async function selectExistingProject(targetProject: Project, switchMode = true) {
     const requestId = ++projectSelectionRequestRef.current;
+    setToast(null);
     const previousProject = project;
     const previousWorkspace = workspace;
     const cachedWorkspace = workspaceCacheRef.current.get(targetProject.id) ?? null;
@@ -252,7 +258,9 @@ export default function App() {
       return true;
     } catch (err) {
       if (requestId !== projectSelectionRequestRef.current) return false;
-      markProjectUnavailable(targetProject.id);
+      if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
+        markProjectUnavailable(targetProject.id);
+      }
       setProject(previousProject);
       setWorkspace(previousWorkspace);
       const reason = err instanceof Error ? err.message : String(err);
@@ -306,6 +314,7 @@ export default function App() {
   }
 
   async function initializeAuthenticatedApp() {
+    const generation = ++availabilityGenerationRef.current;
     try {
       setStatus(await api.status());
     } catch (err) {
@@ -321,6 +330,11 @@ export default function App() {
     const id = await refreshConversations();
     await loadMessages(id);
     const loadedProjects = await refreshProjects();
+    void probeProjectAvailability(
+      loadedProjects.map((item) => item.id),
+      () => generation === availabilityGenerationRef.current,
+      (id, available) => available ? clearProjectUnavailable(id) : markProjectUnavailable(id),
+    );
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
@@ -334,6 +348,7 @@ export default function App() {
   }
 
   function clearAuthenticatedState() {
+    availabilityGenerationRef.current += 1;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
     setAccessToken(null);
@@ -443,6 +458,9 @@ export default function App() {
   }
 
   async function selectConversation(id: string) {
+    projectSelectionRequestRef.current += 1;
+    setProjectLoadingId(null);
+    setToast(null);
     const conversation = conversations.find((item) => item.id === id);
     setActivePage("agent");
     setCurrentId(id);
@@ -450,10 +468,21 @@ export default function App() {
     if (!conversation) return;
 
     setMode(conversation.mode);
-    if (conversation.mode !== "project" || !conversation.project_id || conversation.project_id === project?.id) return;
+    if (conversation.mode !== "project" || !conversation.project_id) return;
+
+    if (unavailableProjectIds.has(conversation.project_id)) {
+      setProject(null);
+      setWorkspace(null);
+      setToast("这个对话原来关联的项目当前不可用；历史消息仍可查看，重新打开文件夹后可以继续工作");
+      return;
+    }
+
+    if (conversation.project_id === project?.id && workspace) return;
 
     let targetProject = projects.find((item) => item.id === conversation.project_id);
     if (!targetProject) {
+      setProject(null);
+      setWorkspace(null);
       const refreshedProjects = await refreshProjects();
       targetProject = refreshedProjects.find((item) => item.id === conversation.project_id);
     }
@@ -464,6 +493,8 @@ export default function App() {
     try {
       await selectExistingProject(targetProject, false);
     } catch (err) {
+      setProject(null);
+      setWorkspace(null);
       setToast(err instanceof Error ? err.message : String(err));
     }
   }

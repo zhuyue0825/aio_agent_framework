@@ -902,6 +902,18 @@ def open_workspace(payload: WorkspaceOpenRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
 
 
+@app.get("/internal/v1/workspaces/availability")
+def workspace_availability(
+    path: str = Query(min_length=1),
+    owner_id: UUID | None = Query(default=None),
+) -> dict[str, bool]:
+    try:
+        normalize_workspace_root(path, str(owner_id) if owner_id else None)
+        return {"available": True}
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail={"code": "WORKSPACE_ERROR", "message": str(exc)}) from exc
+
+
 @app.get("/internal/v1/workspaces/tree")
 def workspace_tree(
     path: str = Query(min_length=1),

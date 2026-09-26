@@ -99,6 +99,36 @@ def test_workspace_contract_uses_internal_paths(tmp_path: Path) -> None:
     assert (tmp_path / "demo.py").read_text(encoding="utf-8") == "print('after')\n"
 
 
+def test_workspace_availability_does_not_traverse_or_read_files(tmp_path: Path) -> None:
+    with patch("backend.main.build_workspace_tree") as tree, patch.object(Path, "iterdir", side_effect=AssertionError("must not traverse")):
+        response = client.get("/internal/v1/workspaces/availability", params={"path": str(tmp_path)}, headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {"available": True}
+    tree.assert_not_called()
+    assert client.get("/internal/v1/workspaces/availability", params={"path": str(tmp_path)}).status_code == 401
+
+
+def test_workspace_availability_enforces_boundaries_and_missing_directories(tmp_path: Path, monkeypatch) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    monkeypatch.setenv("AIO_ALLOWED_WORKSPACE_ROOTS", str(allowed))
+    for path in (tmp_path, allowed / "missing"):
+        response = client.get("/internal/v1/workspaces/availability", params={"path": str(path)}, headers=AUTH_HEADERS)
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "WORKSPACE_ERROR"
+
+
+def test_workspace_availability_enforces_owner_scope(tmp_path: Path, monkeypatch) -> None:
+    owner, other = uuid4(), uuid4()
+    monkeypatch.setenv("AIO_ALLOWED_WORKSPACE_ROOTS", str(tmp_path))
+    monkeypatch.setenv("AIO_MULTI_TENANT_WORKSPACES", "true")
+    root = tmp_path / str(owner)
+    root.mkdir()
+    for requested_owner, expected in ((owner, 200), (other, 400)):
+        response = client.get("/internal/v1/workspaces/availability", params={"path": str(root), "owner_id": str(requested_owner)}, headers=AUTH_HEADERS)
+        assert response.status_code == expected
+
+
 def test_workspace_apply_operation_id_is_deduplicated(tmp_path: Path) -> None:
     operation_id = uuid4()
     original = "print('before')\n"

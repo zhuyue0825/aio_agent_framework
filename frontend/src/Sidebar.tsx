@@ -96,7 +96,8 @@ export default function Sidebar({
   onSelectProject,
   onOpenFolder,
 }: SidebarProps) {
-  const knownProjectIds = new Set(projects.map((item) => item.id));
+  const visibleProjects = projects.filter((item) => !unavailableProjectIds.has(item.id));
+  const knownProjectIds = new Set(visibleProjects.map((item) => item.id));
   const recentConversations = conversations.filter(
     (conversation) => !conversation.project_id || !knownProjectIds.has(conversation.project_id),
   );
@@ -142,27 +143,26 @@ export default function Sidebar({
         </div>
 
         <div className="sidebar-project-list">
-          {projects.map((item) => {
+          {visibleProjects.map((item) => {
             const projectConversations = conversations.filter((conversation) => conversation.project_id === item.id);
             const active = activePage === "agent" && item.id === currentProjectId && mode === "project";
             const loading = item.id === projectLoadingId;
-            const unavailable = unavailableProjectIds.has(item.id);
             return (
               <section
-                className={`sidebar-project-group ${active ? "active" : ""} ${unavailable ? "unavailable" : ""}`}
+                className={`sidebar-project-group ${active ? "active" : ""}`}
                 aria-label={`${item.name} 项目`}
                 key={item.id}
               >
                 <div className="sidebar-project-row">
                   <button
                     className="sidebar-project-main"
-                    title={unavailable ? `${item.workspace_root}（当前部署不可用）` : item.workspace_root}
+                    title={item.workspace_root}
                     onClick={() => onSelectProject(item)}
                   >
                     <Folder className={loading ? "project-folder-loading" : ""} size={16} />
                     <span className="sidebar-project-label">
                       <span>{item.name}</span>
-                      {loading ? <small>加载中</small> : unavailable ? <small>不可用</small> : null}
+                      {loading ? <small>加载中</small> : null}
                     </span>
                   </button>
                   <button
@@ -191,7 +191,7 @@ export default function Sidebar({
               </section>
             );
           })}
-          {!projects.length ? <span className="sidebar-project-empty">打开文件夹后会显示在这里</span> : null}
+          {!visibleProjects.length ? <span className="sidebar-project-empty">打开文件夹后会显示在这里</span> : null}
         </div>
 
         {activePage === "mcp" ? (
