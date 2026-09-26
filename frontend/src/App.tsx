@@ -477,7 +477,7 @@ export default function App() {
       return;
     }
 
-    if (conversation.project_id === project?.id) return;
+    if (conversation.project_id === project?.id && workspace) return;
 
     let targetProject = projects.find((item) => item.id === conversation.project_id);
     if (!targetProject) {
