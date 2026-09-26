@@ -2351,3 +2351,44 @@ body.preview-resizing * {
   background: #fff;
   color: #475569;
 }
+/* Conversation materials and verified source previews */
+.retrieval-record { margin-top: 12px; color: #697386; font-size: 12px; }
+.retrieval-record summary { cursor: pointer; }
+.retrieval-record div { padding: 8px; background: #f7f9fc; margin-top: 4px; border-radius: 6px; }
+.retrieval-record small { display: block; margin-top: 4px; }
+.material-composer { position: relative; width: min(100%, 880px); margin: 0 auto 8px; }
+.material-actions, .attachment-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.material-actions { padding: 4px 0; }
+.material-button, .message-materials button, .message-sources button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #dce3ee; background: #fff; border-radius: 8px; padding: 7px 10px; color: #41516b; cursor: pointer; font-size: 12px; }
+.material-button.selected { background: #edf4ff; border-color: #b4ceff; color: #2859ae; }
+.material-caption, .material-popover small { color: #7d889c; font-size: 11px; }
+.material-popover { position: absolute; z-index: 30; bottom: 44px; left: 0; width: min(360px, 90vw); padding: 20px 14px 14px; border: 1px solid #dce3ee; border-radius: 12px; background: #fff; box-shadow: 0 8px 32px #23314c20; display: grid; gap: 12px; }
+.material-popover button { display: flex; align-items: center; gap: 8px; padding: 8px; border: 0; border-radius: 6px; background: #f6f8fc; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.material-popover label { display: flex; align-items: flex-start; gap: 8px; }
+.material-popover small { display: block; margin-top: 5px; line-height: 1.6; }
+.material-popover .material-close { position: absolute; right: 5px; top: 3px; background: transparent; }
+.material-popover input:not([type=checkbox]) { width: 100%; border: 1px solid #dce3ee; border-radius: 6px; padding: 7px; }
+.workspace-material-list { max-height: 260px; overflow: auto; display: grid; gap: 4px; }
+.attachment-chips { margin-bottom: 6px; }
+.attachment-chip { display: flex; align-items: center; gap: 7px; max-width: 320px; padding: 8px; background: #f5f8fc; border: 1px solid #dce3ee; border-radius: 9px; font-size: 12px; }
+.attachment-chip span { min-width: 0; overflow-wrap: anywhere; }
+.attachment-chip small { display: block; font-size: 10px; color: #75839a; margin-top: 3px; }
+.attachment-chip.failed { border-color: #efb0ad; background: #fff7f6; }
+.attachment-chip button, .material-error button { border: 0; background: transparent; cursor: pointer; color: #61718b; padding: 3px; }
+.material-error { font-size: 12px; color: #b03535; padding: 6px; }
+.message-materials, .message-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.message-sources small { flex-basis: 100%; color: #7b879a; font-size: 11px; }
+.message-sources button { font-size: 11px; padding: 5px 8px; background: #f8faff; }
+.inline-citation { border: 0; border-radius: 4px; color: #2859ae; background: #eaf2ff; padding: 1px 5px; cursor: pointer; font-size: .85em; vertical-align: baseline; }
+.evidence-panel { position: fixed; z-index: 60; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); background: #fff; border-left: 1px solid #dce3ee; box-shadow: -10px 0 40px #14213c18; display: flex; flex-direction: column; }
+.evidence-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px; border-bottom: 1px solid #e5eaf2; }
+.evidence-panel header strong { overflow-wrap: anywhere; }
+.evidence-panel header small { display: block; color: #75839a; margin-top: 6px; }
+.evidence-panel header button { border: 0; background: #f3f6fb; border-radius: 6px; padding: 6px; cursor: pointer; }
+.evidence-body { flex: 1; overflow: auto; padding: 16px; }
+.evidence-segment { border: 1px solid transparent; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+.evidence-segment.highlighted { background: #fff8df; border-color: #f0d988; }
+.evidence-segment small { color: #75839a; }
+.evidence-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.8; font-family: ui-monospace, monospace; }
+.material-composer button:disabled { cursor: not-allowed; opacity: .5; }
+@media(max-width: 640px) { .material-caption { display: none; } .attachment-chip { max-width: 100%; } }

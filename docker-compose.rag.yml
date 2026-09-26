@@ -1,0 +1,23 @@
+name: aio-rag-lab
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag_lab
+      POSTGRES_USER: rag_lab
+      POSTGRES_PASSWORD: ${RAG_DB_PASSWORD:?Set RAG_DB_PASSWORD in the external env file}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - ${RAG_PGDATA_PATH:?Set RAG_PGDATA_PATH}:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U rag_lab -d rag_lab"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
