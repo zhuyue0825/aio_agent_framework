@@ -16,6 +16,8 @@ import {
   type User,
   type Workspace,
   type WorkspaceFile,
+  type MaterialSelection,
+  type Evidence,
 } from "./api";
 import AuthScreen from "./AuthScreen";
 import Chat from "./Chat";
@@ -56,6 +58,14 @@ function progressText(event: RunEvent) {
       return `${step || "当前步骤"}：执行 ${tool}`;
     case "agent.tool.completed":
       return `${tool} 执行完成`;
+    case "agent.knowledge.search.started":
+      return `正在检索知识库：${String(event.payload.query ?? "")}`;
+    case "agent.knowledge.search.completed":
+      return `知识库返回 ${String(event.payload.count)} 条资料`;
+    case "agent.knowledge.search.failed":
+      return "知识库检索失败";
+    case "agent.sources":
+      return String(event.payload.message ?? "已读取来源");
     case "agent.response.ready":
       return "正在保存 Agent 回复";
     case "run.succeeded":
@@ -81,6 +91,7 @@ export default function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [liveSources,setLiveSources] = useState<Evidence[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -484,11 +495,13 @@ export default function App() {
     }
   }
 
-  async function send(task: string) {
-    if (!currentId || activeRun) return;
+  async function send(task: string, materials?: MaterialSelection) {
+    if (!currentId || activeRun) return false;
+    let accepted=false;
+    setLiveSources([]);
     if (mode === "project" && (!workspace || !project)) {
       setFolderPickerOpen(true);
-      return;
+      return false;
     }
     setToast(null);
     setRunProgress("正在创建任务");
@@ -496,7 +509,8 @@ export default function App() {
     const abortController = new AbortController();
     runAbortRef.current = abortController;
     try {
-      const created = await api.createRun(currentId, task, mode, project?.id);
+      const created = await api.createRun(currentId, task, mode, project?.id, materials);
+      accepted=true;
       setActiveRun(created.run);
       await loadMessages(currentId);
       let finalRun: AgentRun;
@@ -505,6 +519,7 @@ export default function App() {
           created.run.id,
           (event) => {
             setRunProgress(progressText(event));
+            if(Array.isArray(event.payload.sources)) setLiveSources(current=>{const all=new Map(current.map(s=>[s.evidence_id,s]));for(const s of event.payload.sources as Evidence[]) all.set(s.evidence_id,s);return [...all.values()];});
             if (event.event_type === "agent.token.delta" && typeof event.payload.delta === "string") {
               setStreamingText((current) => current + String(event.payload.delta));
             }
@@ -548,7 +563,9 @@ export default function App() {
       setActiveRun(null);
       setRunProgress(null);
       setStreamingText("");
+      setLiveSources([]);
     }
+    return accepted;
   }
 
   async function applyProposedChanges() {
@@ -653,6 +670,10 @@ export default function App() {
       ) : (
         <>
           <Chat
+            key={currentId}
+            conversationId={currentId ?? ""}
+            projectId={project?.id}
+            liveSources={liveSources}
             status={status}
             modelOptions={modelOptions}
             modelId={currentConversation?.model_id ?? "local:minimind-64m"}

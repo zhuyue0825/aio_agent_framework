@@ -76,7 +76,7 @@ it("sends a chat message and exposes cancellation for an active run", async () =
 
   await userEvent.type(screen.getByPlaceholderText("输入消息..."), "你好");
   await userEvent.click(screen.getByRole("button", { name: "发送" }));
-  expect(send).toHaveBeenCalledWith("你好");
+  expect(send).toHaveBeenCalledWith("你好", { attachment_ids: [], knowledge_ids: [] });
 
   view.rerender(<Chat {...baseProps} busy progress="第 1 步：请求模型" streamingText="正在" />);
   expect(screen.getByText("正在")).toBeVisible();

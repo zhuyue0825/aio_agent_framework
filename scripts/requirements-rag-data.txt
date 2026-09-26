@@ -1,0 +1,2 @@
+# Only needed to prepare data or verify against the original Parquet sources.
+pyarrow==23.0.1

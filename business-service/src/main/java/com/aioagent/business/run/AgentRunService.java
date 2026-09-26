@@ -52,6 +52,7 @@ public class AgentRunService {
     private final ModelOptionsService modelOptions;
     private final McpServerService mcpServers;
     private final TransactionTemplate transaction;
+    private final com.aioagent.business.material.MaterialService materials;
 
     public AgentRunService(
             AgentRunRepository runs,
@@ -66,8 +67,10 @@ public class AgentRunService {
             RateLimitService rateLimits,
             ModelOptionsService modelOptions,
             McpServerService mcpServers,
+            com.aioagent.business.material.MaterialService materials,
             TransactionTemplate transaction,
             ObjectMapper mapper) {
+        this.materials = materials;
         this.runs = runs;
         this.users = users;
         this.messages = messages;
@@ -84,6 +87,10 @@ public class AgentRunService {
         this.mapper = mapper;
     }
 
+    public CreateResult create(UserAccount user, UUID conversationId, String task, ConversationMode mode, UUID projectId, String approvalMode, int maxHistoryMessages, String idempotencyKey, String traceId) {
+        return create(user,conversationId,task,mode,projectId,approvalMode,maxHistoryMessages,idempotencyKey,traceId,List.of(),List.of());
+    }
+
     public CreateResult create(
             UserAccount user,
             UUID conversationId,
@@ -93,7 +100,7 @@ public class AgentRunService {
             String approvalMode,
             int maxHistoryMessages,
             String idempotencyKey,
-            String traceId) {
+            String traceId, List<UUID> attachmentIds, List<String> knowledgeIds) {
         Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(user.getId(), idempotencyKey);
         if (existing.isPresent()) {
             return new CreateResult(existing.get(), false);
@@ -117,7 +124,7 @@ public class AgentRunService {
                 idempotencyKey,
                 traceId,
                 expectedProvider,
-                expectedModelId));
+                expectedModelId, attachmentIds, knowledgeIds));
         if (result == null) {
             throw new IllegalStateException("Run creation transaction returned no result");
         }
@@ -135,7 +142,7 @@ public class AgentRunService {
             String idempotencyKey,
             String traceId,
             ConversationModelProvider expectedProvider,
-            String expectedModelId) {
+            String expectedModelId, List<UUID> attachmentIds, List<String> knowledgeIds) {
         UserAccount managedUser = users.findLockedById(user.getId())
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "当前用户不存在"));
         Optional<AgentRun> existing = runs.findByRequestedByIdAndIdempotencyKey(managedUser.getId(), idempotencyKey);
@@ -175,7 +182,8 @@ public class AgentRunService {
             conversation.rename(title.substring(0, Math.min(title.length(), 40)));
         }
 
-        Message userMessage = messages.save(new Message(conversation, MessageRole.USER, task, "{}"));
+        Message userMessage = messages.save(new Message(conversation, MessageRole.USER, task,
+                materials.json(materials.snapshot(managedUser,conversationId,attachmentIds,knowledgeIds))));
         AgentRun run = runs.save(new AgentRun(
                 conversation,
                 userMessage,
@@ -236,7 +244,8 @@ public class AgentRunService {
                 run.getRequestedBy().getId(),
                 run.getProject() == null ? run.getRequestedBy().getId() : run.getProject().getOwner().getId(),
                 mcpServers.executionConfigs(run.getRequestedBy().getId()),
-                run.getTraceId()));
+                run.getTraceId(),
+                materials.execution(run.getRequestedBy(),run.getConversation().getId(),run.getUserMessage().getMetadataJson())));
     }
 
     @Transactional
@@ -263,6 +272,8 @@ public class AgentRunService {
                 response.modelLatencyMs());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("sources", response.sources());
+        metadata.put("retrievals", response.retrievals());
         metadata.put("steps", response.steps());
         metadata.put("mode", run.getMode().name().toLowerCase());
         metadata.put("changed_files", changedFiles);
@@ -517,7 +528,7 @@ public class AgentRunService {
             UUID requestedById,
             UUID workspaceOwnerId,
             List<AgentServiceClient.McpServerConfig> mcpServers,
-            String traceId) {
+            String traceId, Map<String,Object> materials) {
         public PreparedExecution {
             mcpServers = mcpServers == null ? List.of() : List.copyOf(mcpServers);
         }
