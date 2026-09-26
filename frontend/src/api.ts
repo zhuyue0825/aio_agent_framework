@@ -517,6 +517,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+  workspaceAvailability: (projectId: string) =>
+    request<{ available: boolean }>(`/api/v1/projects/${projectId}/workspace/availability`),
   workspaceTree: (projectId: string) =>
     request<{ workspace: Workspace }>(`/api/v1/projects/${projectId}/workspace/tree`),
   workspaceFile: (projectId: string, path: string) =>

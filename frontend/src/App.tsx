@@ -28,6 +28,7 @@ import FolderPicker from "./FolderPicker";
 import ModelSettingsDialog from "./ModelSettingsDialog";
 import McpServersPage from "./McpServersPage";
 import Sidebar from "./Sidebar";
+import { probeProjectAvailability } from "./projectAvailability";
 
 const WORKSPACE_STORAGE_KEY = "aio-agent-workspace";
 const PREVIEW_WIDTH_STORAGE_KEY = "aio-agent-preview-width";
@@ -117,6 +118,7 @@ export default function App() {
   const previewResizeCleanupRef = useRef<(() => void) | null>(null);
   const workspaceCacheRef = useRef<Map<string, Workspace>>(new Map());
   const projectSelectionRequestRef = useRef(0);
+  const availabilityGenerationRef = useRef(0);
 
   function previewWidthLimit() {
     const appWidth = appRef.current?.getBoundingClientRect().width ?? window.innerWidth;
@@ -209,20 +211,6 @@ export default function App() {
       next.add(projectId);
       return next;
     });
-  }
-
-  async function discoverUnavailableProjects(candidateProjects: Project[]) {
-    await Promise.all(candidateProjects.map(async (candidate) => {
-      try {
-        const data = await api.workspaceTree(candidate.id);
-        rememberWorkspace(candidate.id, data.workspace);
-        clearProjectUnavailable(candidate.id);
-      } catch (err) {
-        if (err instanceof ApiError && err.code === "WORKSPACE_ERROR") {
-          markProjectUnavailable(candidate.id);
-        }
-      }
-    }));
   }
 
   async function openProject(path: string, switchMode = true) {
@@ -325,6 +313,7 @@ export default function App() {
   }
 
   async function initializeAuthenticatedApp() {
+    const generation = ++availabilityGenerationRef.current;
     try {
       setStatus(await api.status());
     } catch (err) {
@@ -340,7 +329,11 @@ export default function App() {
     const id = await refreshConversations();
     await loadMessages(id);
     const loadedProjects = await refreshProjects();
-    void discoverUnavailableProjects(loadedProjects);
+    void probeProjectAvailability(
+      loadedProjects.map((item) => item.id),
+      () => generation === availabilityGenerationRef.current,
+      (id, available) => available ? clearProjectUnavailable(id) : markProjectUnavailable(id),
+    );
     const previousWorkspace = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (previousWorkspace) {
       try {
@@ -354,6 +347,7 @@ export default function App() {
   }
 
   function clearAuthenticatedState() {
+    availabilityGenerationRef.current += 1;
     runAbortRef.current?.abort();
     runAbortRef.current = null;
     setAccessToken(null);

@@ -162,6 +162,10 @@ public class AgentServiceClient {
         return postMap("/internal/v1/workspaces/open", Map.of("path", path, "owner_id", ownerId));
     }
 
+    public Map<String, Object> workspaceAvailability(String root, UUID ownerId) {
+        return getMap("/internal/v1/workspaces/availability", Optional.of(root), null, null, ownerId);
+    }
+
     public Map<String, Object> workspaceTree(String root, UUID ownerId) {
         return getMap("/internal/v1/workspaces/tree", Optional.of(root), null, null, ownerId);
     }

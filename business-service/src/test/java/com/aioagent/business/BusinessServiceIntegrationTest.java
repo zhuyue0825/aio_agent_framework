@@ -766,6 +766,33 @@ class BusinessServiceIntegrationTest {
     }
 
     @Test
+    void workspaceAvailabilityRequiresMembershipAndUsesProjectOwner() throws Exception {
+        UserAccount owner = authService.register("availability-owner", "password-1234").user();
+        UserAccount member = authService.register("availability-member", "password-1234").user();
+        String root = "/workspace/availability";
+        when(agentService.openWorkspace(root, owner.getId())).thenReturn(Map.of(
+                "workspace", Map.of("root", root, "name", "availability", "tree", List.of())));
+        UUID projectId = projects.open(owner, root).project().getId();
+        String endpoint = "/api/v1/projects/" + projectId + "/workspace/availability";
+        mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(member.getId().toString()))))
+                .andExpect(status().isNotFound());
+        verify(agentService, org.mockito.Mockito.never()).workspaceAvailability(anyString(), any(UUID.class));
+        projects.addMember(projectId, owner, member.getUsername());
+        when(agentService.workspaceAvailability(root, owner.getId())).thenReturn(Map.of("available", true));
+        mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(member.getId().toString()))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.available").value(true));
+        verify(agentService).workspaceAvailability(root, owner.getId());
+        when(agentService.workspaceAvailability(root, owner.getId())).thenThrow(
+                new com.aioagent.business.agent.AgentServiceException("missing", null, false, "WORKSPACE_ERROR"));
+        mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(owner.getId().toString()))))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("WORKSPACE_ERROR"));
+        when(agentService.workspaceAvailability(root, owner.getId())).thenThrow(
+                new com.aioagent.business.agent.AgentServiceException("offline", null, false, "AGENT_SERVICE_ERROR"));
+        mockMvc.perform(get(endpoint).with(jwt().jwt(token -> token.subject(owner.getId().toString()))))
+                .andExpect(status().isBadGateway());
+    }
+
+    @Test
     void concurrentProjectOpenAndMemberAdditionUseDatabaseUpserts() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         UserAccount owner = authService.register("upsert-owner-" + suffix, "password-1234").user();

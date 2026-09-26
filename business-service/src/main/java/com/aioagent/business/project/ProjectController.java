@@ -77,6 +77,12 @@ public class ProjectController {
         return agentService.listDirectories(path, user.getId());
     }
 
+    @GetMapping("/projects/{projectId}/workspace/availability")
+    public Map<String, Object> availability(@PathVariable UUID projectId, Authentication authentication) {
+        Project project = projectService.requireMember(projectId, currentUser.require(authentication));
+        return agentService.workspaceAvailability(project.getWorkspaceRoot(), project.getOwner().getId());
+    }
+
     @GetMapping("/projects/{projectId}/workspace/tree")
     public Map<String, Object> tree(@PathVariable UUID projectId, Authentication authentication) {
         Project project = projectService.requireMember(projectId, currentUser.require(authentication));

@@ -76,6 +76,15 @@ test("uses project selection as context and shows a resizable preview only for a
     finished_at: now,
   };
 
+  const missingProject = { ...project, id: "missing-project", name: "旧电脑项目", workspace_root: "/old/project" };
+  const offlineProject = { ...project, id: "offline-project", name: "暂时离线项目" };
+  const history = { ...conversation, id: "history-1", title: "旧项目的历史对话", mode: "project", project_id: missingProject.id };
+  const attachment = { id: "attachment-1", name: "example.ts", status: "READY", source_kind: "workspace", source_path: "src/example.ts", segments: [{ id: "chunk-1", location: "L1", text: "export const answer = 42;" }] };
+  const source = { evidence_id: "S1", kind: "attachment", name: "example.ts", path: "src/example.ts", location: "L1", chunk_id: "chunk-1", attachment_id: attachment.id, cited: true };
+  const historyMessages = [{ id: "history-message", role: "assistant", content: "历史回答来自文件快照。", created_at: now, metadata: { sources: [source] } }];
+  const treeRequests: string[] = [];
+  let referenced = false;
+
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -129,10 +138,24 @@ test("uses project selection as context and shows a resizable preview only for a
         },
       });
     }
-    if (path === "/api/v1/conversations") return route.fulfill({ json: { conversations: [conversation] } });
-    if (path.endsWith("/messages")) return route.fulfill({ json: { messages: [] } });
+    if (path === "/api/v1/conversations") return route.fulfill({ json: { conversations: [conversation, history] } });
+    if (path === "/api/v1/knowledge-bases") return route.fulfill({ json: { knowledge_bases: [] } });
+    if (path.endsWith("/knowledge")) return route.fulfill({ json: { knowledge_ids: [] } });
+    if (path.endsWith("/attachments/reference")) {
+      expect(route.request().postDataJSON()).toEqual({ project_id: project.id, path: "src/example.ts" });
+      referenced = true;
+      return route.fulfill({ json: attachment });
+    }
+    if (path.endsWith("/attachments/attachment-1")) return route.fulfill({ json: attachment });
+    if (path.endsWith("/messages")) return route.fulfill({ json: { messages: path.includes(history.id) ? historyMessages : [] } });
+    if (path.endsWith("/workspace/availability")) {
+      if (path.includes(missingProject.id)) return route.fulfill({ status: 400, json: { error: { code: "WORKSPACE_ERROR", message: "目录不可用" } } });
+      if (path.includes(offlineProject.id)) return route.fulfill({ status: 502, json: { error: { code: "AGENT_SERVICE_ERROR", message: "暂时离线" } } });
+      return route.fulfill({ json: { available: true } });
+    }
     if (path === "/api/v1/projects/open") return route.fulfill({ json: { project, workspace } });
     if (path === "/api/v1/projects/project-1/workspace/tree") {
+      treeRequests.push(path);
       return route.fulfill({ json: { workspace } });
     }
     if (path === "/api/v1/projects/project-1/workspace/file") {
@@ -150,6 +173,8 @@ test("uses project selection as context and shows a resizable preview only for a
       });
     }
     if (path.endsWith("/runs") && route.request().method() === "POST") {
+      expect(referenced).toBe(true);
+      expect(route.request().postDataJSON().attachment_ids).toEqual([attachment.id]);
       return route.fulfill({
         status: 202,
         json: {
@@ -175,7 +200,7 @@ test("uses project selection as context and shows a resizable preview only for a
       });
     }
     if (path === "/api/v1/runs/run-1") return route.fulfill({ json: { run: completedRun } });
-    if (path === "/api/v1/projects") return route.fulfill({ json: { projects: [project] } });
+    if (path === "/api/v1/projects") return route.fulfill({ json: { projects: [project, missingProject, offlineProject] } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_MOCKED", message: path } } });
   });
 
@@ -192,6 +217,18 @@ test("uses project selection as context and shows a resizable preview only for a
   await expect(page.getByRole("button", { name: "aio-project", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "保留的最近对话", exact: true })).toBeVisible();
 
+  await expect(page.getByRole("button", { name: "旧电脑项目", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "暂时离线项目", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: history.title, exact: true })).toBeVisible();
+  expect(treeRequests).toHaveLength(0);
+  await page.getByRole("button", { name: history.title, exact: true }).click();
+  await expect(page.getByText("历史回答来自文件快照。")).toBeVisible();
+  await page.getByRole("button", { name: "[S1] example.ts · L1 · 已引用", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "来源原文" })).toContainText("export const answer = 42;");
+  await expect(page.locator(".evidence-segment.highlighted")).toContainText("L1");
+  await page.getByRole("button", { name: "关闭来源" }).click();
+  await page.getByRole("button", { name: "保留的最近对话", exact: true }).click();
+
   await page.getByRole("button", { name: "aio-project", exact: true }).click();
   await expect(page.locator(".app")).toHaveClass(/project-mode/);
   await expect(page.getByRole("region", { name: "aio-project 项目" })).toHaveClass(/active/);
@@ -199,6 +236,11 @@ test("uses project selection as context and shows a resizable preview only for a
   await expect(page.locator(".file-tree")).toHaveCount(0);
   await expect(page.locator(".preview-panel")).toHaveCount(0);
   await expect(page.getByRole("separator", { name: "调整代码预览宽度" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "添加文件" }).click();
+  await page.getByRole("button", { name: "引用工作区文件", exact: true }).click();
+  await page.getByRole("button", { name: "src/example.ts", exact: true }).click();
+  await expect(page.locator(".attachment-chip.ready")).toContainText("已就绪");
 
   await page.getByPlaceholder("让 Agent 在 aio-project 中完成任务...").fill("修改示例文件");
   await page.getByRole("button", { name: "发送" }).click();
