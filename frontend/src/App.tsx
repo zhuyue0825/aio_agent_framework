@@ -235,6 +235,7 @@ export default function App() {
 
   async function selectExistingProject(targetProject: Project, switchMode = true) {
     const requestId = ++projectSelectionRequestRef.current;
+    setToast(null);
     const previousProject = project;
     const previousWorkspace = workspace;
     const cachedWorkspace = workspaceCacheRef.current.get(targetProject.id) ?? null;
@@ -457,6 +458,9 @@ export default function App() {
   }
 
   async function selectConversation(id: string) {
+    projectSelectionRequestRef.current += 1;
+    setProjectLoadingId(null);
+    setToast(null);
     const conversation = conversations.find((item) => item.id === id);
     setActivePage("agent");
     setCurrentId(id);
@@ -464,7 +468,7 @@ export default function App() {
     if (!conversation) return;
 
     setMode(conversation.mode);
-    if (conversation.mode !== "project" || !conversation.project_id || conversation.project_id === project?.id) return;
+    if (conversation.mode !== "project" || !conversation.project_id) return;
 
     if (unavailableProjectIds.has(conversation.project_id)) {
       setProject(null);
@@ -473,8 +477,12 @@ export default function App() {
       return;
     }
 
+    if (conversation.project_id === project?.id) return;
+
     let targetProject = projects.find((item) => item.id === conversation.project_id);
     if (!targetProject) {
+      setProject(null);
+      setWorkspace(null);
       const refreshedProjects = await refreshProjects();
       targetProject = refreshedProjects.find((item) => item.id === conversation.project_id);
     }
@@ -485,6 +493,8 @@ export default function App() {
     try {
       await selectExistingProject(targetProject, false);
     } catch (err) {
+      setProject(null);
+      setWorkspace(null);
       setToast(err instanceof Error ? err.message : String(err));
     }
   }
